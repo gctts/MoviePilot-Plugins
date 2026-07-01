@@ -32,11 +32,6 @@ from app.utils.dom import DomUtils
 from app.utils.http import RequestUtils
 from app.utils.system import SystemUtils
 
-try:
-    from app.chain.transfer import TransferChain
-except Exception:
-    TransferChain = None
-
 ffmpeg_lock = threading.Lock()
 lock = Lock()
 
@@ -69,7 +64,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "4.0.7"
+    plugin_version = "4.0.8"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -97,23 +92,15 @@ class ShortPlayMonitorCustom(_PluginBase):
     _notify = False
     _sync_delete = True
     _medias = {}
-    _transferchain = None
+    _downloadchain = None
     _downloadhis = None
 
     # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
-        self._transferchain = None
+        self._downloadchain = None
         self._downloadhis = None
-        if TransferChain:
-            try:
-                self._transferchain = TransferChain()
-                self._downloadhis = self._transferchain.downloadhis
-            except Exception as e:
-                logger.warn(f"下载历史服务初始化失败，删除联动中的下载器任务处理将跳过：{e}")
-        else:
-            logger.warn("当前 MoviePilot 未找到 TransferChain，删除联动中的下载器任务处理将跳过")
 
         # 清空配置
         self._dirconf = {}
@@ -518,21 +505,22 @@ class ShortPlayMonitorCustom(_PluginBase):
         """
         参考 MediaSyncDel：局部删除则暂停种子，全部删除则删除种子
         """
-        if not self._downloadhis:
-            logger.warn("下载历史服务未初始化，跳过下载器任务处理")
+        download_chain, downloadhis = self.__get_download_chain()
+        if not download_chain or not downloadhis:
+            logger.warn("下载历史服务不可用，跳过下载器任务处理")
             return
 
-        download_hash = self._downloadhis.get_hash_by_fullpath(src)
+        download_hash = downloadhis.get_hash_by_fullpath(src)
         if not download_hash:
             logger.warn(f"未查询到文件 {src} 对应的下载记录")
             return
 
         try:
-            download_history = self._downloadhis.get_by_hash(download_hash)
+            download_history = downloadhis.get_by_hash(download_hash)
             download_type = download_history.type if download_history else ""
 
-            self._downloadhis.delete_file_by_fullpath(fullpath=src)
-            download_files = self._downloadhis.get_files_by_hash(download_hash=download_hash)
+            downloadhis.delete_file_by_fullpath(fullpath=src)
+            download_files = downloadhis.get_files_by_hash(download_hash=download_hash)
             if not download_files:
                 logger.warn(f"未查询到种子任务 {download_hash} 存在文件记录，跳过下载器任务处理")
                 return
@@ -544,13 +532,28 @@ class ShortPlayMonitorCustom(_PluginBase):
 
             if no_del_cnt > 0:
                 logger.info(f"查询种子任务 {download_hash} 存在 {no_del_cnt} 个未删除文件，执行暂停种子操作")
-                self.chain.stop_torrents(download_hash)
+                download_chain.stop_torrents(download_hash)
             else:
                 logger.info(f"查询种子任务 {download_hash} 文件已全部删除，执行删除种子操作")
-                self.chain.remove_torrents(download_hash)
+                download_chain.remove_torrents(download_hash)
             logger.info(f"源文件 {src} 删除联动下载器任务处理完成，类型：{download_type or '未知'}")
         except Exception as e:
             logger.error(f"删除下载器任务失败：{e}")
+
+    def __get_download_chain(self):
+        """
+        删除事件发生时再加载下载链，避免影响普通监控启动
+        """
+        if self._downloadchain and self._downloadhis:
+            return self._downloadchain, self._downloadhis
+        try:
+            from app.chain.download import DownloadChain
+            self._downloadchain = DownloadChain()
+            self._downloadhis = self._downloadchain.downloadhis
+            return self._downloadchain, self._downloadhis
+        except Exception as e:
+            logger.warn(f"下载历史服务加载失败，删除联动中的下载器任务处理将跳过：{e}")
+            return None, None
 
     def send_msg(self):
         """
