@@ -1,6 +1,6 @@
 # MoviePilot-Plugins
 
-自定义短剧刮削插件仓库，插件 ID 为 `ShortPlayMonitorCustom`。
+自定义短剧刮削插件仓库，插件 ID 为 `ShortPlayMonitorCustom`，适配 MoviePilot V2 插件市场。
 
 改动：
 
@@ -13,3 +13,7 @@
 MoviePilot 插件市场仓库地址使用本仓库 GitHub URL。
 
 如果市场里同时维护了原版 `thsrite/MoviePilot-Plugins`，本插件会作为“短剧刮削自定义版”单独显示，不再和原版 `ShortPlayMonitor` 冲突。
+
+V2 市场索引文件：`package.v2.json`
+
+V2 插件源码目录：`plugins.v2/shortplaymonitorcustom`
