@@ -3,11 +3,12 @@
     "name": "短剧刮削自定义版",
     "description": "监控视频短剧创建，禁用 TMDB，仅从 PTerClub、织梦获取短剧封面。",
     "labels": "刮削",
-    "version": "4.0.6",
+    "version": "4.0.7",
     "icon": "Amule_B.png",
     "author": "gctts",
     "level": 1,
     "history": {
+      "v4.0.7": "修复删除联动初始化导致配置页为空的问题：下载历史服务改为容错加载，不影响插件配置页。",
       "v4.0.6": "新增删除联动：源文件删除时同步删除目标硬链接，并按下载历史处理 qB 下载任务；同种子还有未删文件则暂停，全部删除则删种。",
       "v4.0.5": "自定义版：禁用 TMDB 刮削，移除 AGSV/ilolicon，仅使用 pterclub.net 与 zmpt.cc 获取封面；失败回退视频截图。",
       "v4.0.4": "基于当前 MoviePilot 容器内 ShortPlayMonitor 4.0.4 兼容修改，并改为独立插件 ID 避免与原版冲突。"

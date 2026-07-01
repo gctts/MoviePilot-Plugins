@@ -17,7 +17,6 @@ from requests import RequestException
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
-from app.chain.transfer import TransferChain
 from app.helper.sites import SitesHelper
 from app.modules.indexer.spider import SiteSpider
 
@@ -32,6 +31,11 @@ from app.utils.common import retry
 from app.utils.dom import DomUtils
 from app.utils.http import RequestUtils
 from app.utils.system import SystemUtils
+
+try:
+    from app.chain.transfer import TransferChain
+except Exception:
+    TransferChain = None
 
 ffmpeg_lock = threading.Lock()
 lock = Lock()
@@ -65,7 +69,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "4.0.6"
+    plugin_version = "4.0.7"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -100,8 +104,16 @@ class ShortPlayMonitorCustom(_PluginBase):
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
-        self._transferchain = TransferChain()
-        self._downloadhis = self._transferchain.downloadhis
+        self._transferchain = None
+        self._downloadhis = None
+        if TransferChain:
+            try:
+                self._transferchain = TransferChain()
+                self._downloadhis = self._transferchain.downloadhis
+            except Exception as e:
+                logger.warn(f"下载历史服务初始化失败，删除联动中的下载器任务处理将跳过：{e}")
+        else:
+            logger.warn("当前 MoviePilot 未找到 TransferChain，删除联动中的下载器任务处理将跳过")
 
         # 清空配置
         self._dirconf = {}
