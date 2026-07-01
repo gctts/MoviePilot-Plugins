@@ -53,21 +53,21 @@ class FileMonitorHandler(FileSystemEventHandler):
         self.file_change.event_handler(event=event, source_dir=self._watch_path, event_path=event.dest_path)
 
 
-class ShortPlayMonitor(_PluginBase):
+class ShortPlayMonitorCustom(_PluginBase):
     # 插件名称
-    plugin_name = "短剧刮削"
+    plugin_name = "短剧刮削自定义版"
     # 插件描述
-    plugin_desc = "监控视频短剧创建，刮削。"
+    plugin_desc = "监控视频短剧创建，禁用 TMDB，仅从 PTerClub、织梦获取封面。"
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
     plugin_version = "4.0.5"
     # 插件作者
-    plugin_author = "thsrite"
+    plugin_author = "gctts"
     # 作者主页
-    author_url = "https://github.com/thsrite"
+    author_url = "https://github.com/gctts/MoviePilot-Plugins"
     # 插件配置项ID前缀
-    plugin_config_prefix = "shortplaymonitor_"
+    plugin_config_prefix = "shortplaymonitorcustom_"
     # 加载顺序
     plugin_order = 26
     # 可使用的用户级别
@@ -925,7 +925,7 @@ class ShortPlayMonitor(_PluginBase):
                                             'type': 'info',
                                             'variant': 'tonal',
                                             'text': '配置说明：'
-                                                    'https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/docs/ShortPlayMonitor.md'
+                                                    'https://github.com/gctts/MoviePilot-Plugins#readme'
                                         }
                                     }
                                 ]

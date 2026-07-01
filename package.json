@@ -1,15 +1,15 @@
 {
-  "ShortPlayMonitor": {
-    "name": "短剧刮削",
+  "ShortPlayMonitorCustom": {
+    "name": "短剧刮削自定义版",
     "description": "监控视频短剧创建，禁用 TMDB，仅从 PTerClub、织梦获取短剧封面。",
     "labels": "刮削",
     "version": "4.0.5",
     "icon": "Amule_B.png",
-    "author": "thsrite/custom-Git-Hub96",
+    "author": "gctts",
     "level": 1,
     "history": {
       "v4.0.5": "自定义版：禁用 TMDB 刮削，移除 AGSV/ilolicon，仅使用 pterclub.net 与 zmpt.cc 获取封面；失败回退视频截图。",
-      "v4.0.4": "基于当前 MoviePilot 容器内 ShortPlayMonitor 4.0.4 兼容修改。"
+      "v4.0.4": "基于当前 MoviePilot 容器内 ShortPlayMonitor 4.0.4 兼容修改，并改为独立插件 ID 避免与原版冲突。"
     }
   }
 }
