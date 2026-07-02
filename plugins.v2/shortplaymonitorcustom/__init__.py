@@ -71,9 +71,9 @@ class FileMonitorHandler(FileSystemEventHandler):
 
 class ShortPlayMonitorCustom(_PluginBase):
     # 插件名称
-    plugin_name = "短剧刮削自定义版"
+    plugin_name = "短剧刮削"
     # 插件描述
-    plugin_desc = "监控视频短剧创建，禁用 TMDB，仅从 PTerClub、织梦获取封面，支持双向删除联动。"
+    plugin_desc = "监控短剧，仅从 PTerClub、织梦获取短剧封面，支持双向删除联动。"
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
@@ -171,13 +171,13 @@ class ShortPlayMonitorCustom(_PluginBase):
                 target_dir = target_dir if target_dir == "/" else target_dir.rstrip("/")
                 if not source_dir or not target_dir:
                     logger.error(f"{monitor_conf} 格式错误：监控目录和目的目录不能为空")
-                    self.systemmessage.put("短剧刮削自定义版监控配置错误：监控目录和目的目录不能为空")
+                    self.systemmessage.put("短剧刮削监控配置错误：监控目录和目的目录不能为空")
                     continue
                 target_dir_path = Path(target_dir)
                 target_dir_root = target_dir_path.resolve(strict=False)
                 if not target_dir_path.is_absolute() or target_dir_root == Path(target_dir_root.anchor):
                     logger.error(f"{monitor_conf} 格式错误：目的目录必须是非根目录的绝对路径")
-                    self.systemmessage.put("短剧刮削自定义版监控配置错误：目的目录必须是非根目录的绝对路径")
+                    self.systemmessage.put("短剧刮削监控配置错误：目的目录必须是非根目录的绝对路径")
                     continue
 
                 # 存储目录监控配置

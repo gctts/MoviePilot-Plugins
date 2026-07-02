@@ -1,7 +1,7 @@
 {
   "ShortPlayMonitorCustom": {
-    "name": "短剧刮削自定义版",
-    "description": "监控视频短剧创建，禁用 TMDB，仅从 PTerClub、织梦获取短剧封面，支持双向删除联动。",
+    "name": "短剧刮削",
+    "description": "监控短剧，仅从 PTerClub、织梦获取短剧封面，支持双向删除联动。",
     "labels": "刮削",
     "version": "1.0.0",
     "icon": "Amule_B.png",
