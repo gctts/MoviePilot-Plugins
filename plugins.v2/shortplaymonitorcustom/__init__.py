@@ -78,7 +78,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.0"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
