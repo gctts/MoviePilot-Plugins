@@ -52,9 +52,6 @@ class FileMonitorHandler(FileSystemEventHandler):
     def on_moved(self, event):
         self.file_change.event_handler(event=event, source_dir=self._watch_path, event_path=event.dest_path)
 
-    def on_deleted(self, event):
-        self.file_change.event_handler(event=event, source_dir=self._watch_path, event_path=event.src_path)
-
 
 class ShortPlayMonitorCustom(_PluginBase):
     # 插件名称
@@ -64,7 +61,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "4.0.8"
+    plugin_version = "4.0.9"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -90,18 +87,12 @@ class ShortPlayMonitorCustom(_PluginBase):
     _coverconf = {}
     _interval = 10
     _notify = False
-    _sync_delete = True
     _medias = {}
-    _downloadchain = None
-    _downloadhis = None
 
     # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
-        self._downloadchain = None
-        self._downloadhis = None
-
         # 清空配置
         self._dirconf = {}
         self._renameconf = {}
@@ -116,7 +107,6 @@ class ShortPlayMonitorCustom(_PluginBase):
             self._monitor_confs = config.get("monitor_confs")
             self._exclude_keywords = config.get("exclude_keywords") or ""
             self._transfer_type = config.get("transfer_type") or "link"
-            self._sync_delete = config.get("sync_delete", True)
 
         # 停止现有任务
         self.stop_service()
@@ -282,15 +272,6 @@ class ShortPlayMonitorCustom(_PluginBase):
 
         # 文件发生变化
         logger.debug(f"变动类型 {event.event_type} 变动路径 {event_path}")
-        if event.event_type == "deleted":
-            if self._sync_delete:
-                self.__handle_deleted_file(is_directory=event.is_directory,
-                                           event_path=event_path,
-                                           source_dir=source_dir)
-            else:
-                logger.debug(f"{event_path} 删除联动未开启，跳过处理")
-            return
-
         self.__handle_file(is_directory=event.is_directory,
                            event_path=event_path,
                            source_dir=source_dir)
@@ -435,125 +416,6 @@ class ShortPlayMonitorCustom(_PluginBase):
         except Exception as e:
             logger.error(f"event_handler_created error: {e}")
             print(str(e))
-
-    def __build_target_path(self, is_directory: bool, event_path: str, source_dir: str) -> Tuple[Optional[Path], Any]:
-        """
-        按入库时相同规则推算目标路径
-        """
-        dest_dir = self._dirconf.get(source_dir)
-        rename_conf = self._renameconf.get(source_dir)
-        if not dest_dir:
-            logger.warn(f"{source_dir} 未找到目标目录配置，跳过删除联动")
-            return None, None
-
-        target_path = event_path.replace(source_dir, dest_dir)
-        title = None
-        if str(rename_conf) == "true" or str(rename_conf) == "false":
-            rename_conf = bool(rename_conf)
-            target = target_path.replace(dest_dir, "")
-            parent = Path(Path(target).parents[0])
-            last = target.replace(str(parent), "")
-            if rename_conf:
-                title, _ = WordsMatcher().prepare(str(parent))
-                target_path = Path(dest_dir).joinpath(title + last)
-            else:
-                title = parent
-        else:
-            if str(rename_conf) == "smart":
-                target = target_path.replace(dest_dir, "")
-                parent = Path(Path(target).parents[0])
-                last = target.replace(str(parent), "")
-                title = Path(parent).name.split(".")[0]
-                target_path = Path(dest_dir).joinpath(title + last)
-            else:
-                logger.error(f"{target_path} 智能重命名失败")
-                return None, None
-
-        if not is_directory:
-            try:
-                matches = re.search(r'S\d+E\d+', Path(target_path).name)
-                if matches:
-                    target_path = Path(target_path).parent / f"{matches.group()}{Path(Path(target_path).name).suffix}"
-            except Exception as e:
-                logger.debug(str(e))
-
-        return Path(target_path), title
-
-    def __handle_deleted_file(self, is_directory: bool, event_path: str, source_dir: str):
-        """
-        源文件删除后同步删除目标硬链接，并处理下载器任务
-        """
-        try:
-            if is_directory:
-                logger.debug(f"{event_path} 是目录删除事件，跳过删除联动")
-                return
-
-            target_path, _ = self.__build_target_path(is_directory=is_directory,
-                                                      event_path=event_path,
-                                                      source_dir=source_dir)
-            if target_path and target_path.exists():
-                target_path.unlink()
-                logger.info(f"源文件 {event_path} 已删除，同步删除目标文件 {target_path}")
-            elif target_path:
-                logger.info(f"源文件 {event_path} 已删除，目标文件 {target_path} 不存在，跳过目标删除")
-
-            self.__handle_torrent_after_source_delete(src=event_path)
-        except Exception as e:
-            logger.error(f"删除联动处理失败：{e}")
-
-    def __handle_torrent_after_source_delete(self, src: str):
-        """
-        参考 MediaSyncDel：局部删除则暂停种子，全部删除则删除种子
-        """
-        download_chain, downloadhis = self.__get_download_chain()
-        if not download_chain or not downloadhis:
-            logger.warn("下载历史服务不可用，跳过下载器任务处理")
-            return
-
-        download_hash = downloadhis.get_hash_by_fullpath(src)
-        if not download_hash:
-            logger.warn(f"未查询到文件 {src} 对应的下载记录")
-            return
-
-        try:
-            download_history = downloadhis.get_by_hash(download_hash)
-            download_type = download_history.type if download_history else ""
-
-            downloadhis.delete_file_by_fullpath(fullpath=src)
-            download_files = downloadhis.get_files_by_hash(download_hash=download_hash)
-            if not download_files:
-                logger.warn(f"未查询到种子任务 {download_hash} 存在文件记录，跳过下载器任务处理")
-                return
-
-            no_del_cnt = 0
-            for download_file in download_files:
-                if download_file and download_file.state and int(download_file.state) == 1:
-                    no_del_cnt += 1
-
-            if no_del_cnt > 0:
-                logger.info(f"查询种子任务 {download_hash} 存在 {no_del_cnt} 个未删除文件，执行暂停种子操作")
-                download_chain.stop_torrents(download_hash)
-            else:
-                logger.info(f"查询种子任务 {download_hash} 文件已全部删除，执行删除种子操作")
-                download_chain.remove_torrents(download_hash)
-            logger.info(f"源文件 {src} 删除联动下载器任务处理完成，类型：{download_type or '未知'}")
-        except Exception as e:
-            logger.error(f"删除下载器任务失败：{e}")
-
-    def __get_download_chain(self):
-        """
-        删除事件发生时再加载下载链，避免影响普通监控启动
-        """
-        if self._downloadchain and self._downloadhis:
-            return self._downloadchain, self._downloadhis
-        try:
-            from app.chain.download import DownloadChain
-            self._downloadchain = DownloadChain()
-            self._downloadhis = self._downloadchain.downloadhis
-            return self._downloadchain, self._downloadhis
-        except Exception as e:
-            logger.warn(f"下载历史服务加载失败，删除联动中的下载器任务处理将跳过：{e}")
-            return None, None
 
     def send_msg(self):
         """
@@ -870,8 +732,7 @@ class ShortPlayMonitorCustom(_PluginBase):
             "interval": self._interval,
             "notify": self._notify,
             "image": self._image,
-            "monitor_confs": self._monitor_confs,
-            "sync_delete": self._sync_delete
+            "monitor_confs": self._monitor_confs
         })
 
     def get_state(self) -> bool:
@@ -955,22 +816,6 @@ class ShortPlayMonitorCustom(_PluginBase):
                                         'props': {
                                             'model': 'notify',
                                             'label': '发送通知',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'sync_delete',
-                                            'label': '删除联动',
                                         }
                                     }
                                 ]
@@ -1139,8 +984,7 @@ class ShortPlayMonitorCustom(_PluginBase):
             "interval": 10,
             "monitor_confs": "",
             "exclude_keywords": "",
-            "transfer_type": "link",
-            "sync_delete": True
+            "transfer_type": "link"
         }
 
     def get_page(self) -> List[dict]:
