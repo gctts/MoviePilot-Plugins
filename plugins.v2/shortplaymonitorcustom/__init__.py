@@ -19,6 +19,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 from app.helper.downloader import DownloaderHelper
+from app.helper.mediaserver import MediaServerHelper
 from app.helper.sites import SitesHelper
 from app.modules.indexer.spider import SiteSpider
 
@@ -73,7 +74,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件名称
     plugin_name = "短剧刮削"
     # 插件描述
-    plugin_desc = "监控短剧，仅从 PTerClub、织梦获取短剧封面，支持双向删除联动。"
+    plugin_desc = "监控短剧，仅从 PTerClub、织梦获取封面和简介，支持双向删除联动。"
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
@@ -109,9 +110,13 @@ class ShortPlayMonitorCustom(_PluginBase):
     _interval = 10
     _notify = False
     _delete_sync = False
-    _delete_downloader = ""
+    _delete_downloaders = []
+    _refresh_mediaserver = False
+    _mediaservers = []
     _delete_record_cache = {}
+    _notify_image_urls = {}
     _medias = {}
+    _syncing = False
 
     # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
@@ -134,7 +139,17 @@ class ShortPlayMonitorCustom(_PluginBase):
             self._interval = config.get("interval")
             self._notify = config.get("notify")
             self._delete_sync = config.get("delete_sync")
-            self._delete_downloader = config.get("delete_downloader") or ""
+            self._delete_downloaders = config.get("delete_downloaders") or []
+            if isinstance(self._delete_downloaders, str):
+                self._delete_downloaders = [item.strip() for item in re.split(r"[,，\s]+", self._delete_downloaders) if item.strip()]
+            if not self._delete_downloaders and config.get("delete_downloader"):
+                self._delete_downloaders = [config.get("delete_downloader")]
+            self._refresh_mediaserver = config.get("refresh_mediaserver") or False
+            self._mediaservers = config.get("mediaservers") or []
+            if isinstance(self._mediaservers, str):
+                self._mediaservers = [item.strip() for item in re.split(r"[,，\s]+", self._mediaservers) if item.strip()]
+            if not self._mediaservers and config.get("mediaserver"):
+                self._mediaservers = [config.get("mediaserver")]
             self._monitor_confs = config.get("monitor_confs")
             self._exclude_keywords = config.get("exclude_keywords") or ""
             self._transfer_type = config.get("transfer_type") or "link"
@@ -258,8 +273,8 @@ class ShortPlayMonitorCustom(_PluginBase):
                 # 保存配置
                 self.__update_config()
 
-            # 启动任务
-            if self._scheduler.get_jobs():
+            # 启动任务；仅开启媒体库刷新时也要启动调度器，用于合并目录监控触发的刷新。
+            if self._scheduler.get_jobs() or (self._enabled and self._refresh_mediaserver):
                 self._scheduler.print_jobs()
                 self._scheduler.start()
 
@@ -273,14 +288,19 @@ class ShortPlayMonitorCustom(_PluginBase):
         立即运行一次，全量同步目录中所有文件
         """
         logger.info("开始全量同步短剧监控目录 ...")
-        # 遍历所有监控目录
-        for mon_path in self._dirconf.keys():
-            # 遍历目录下所有文件
-            for file_path in SystemUtils.list_files(Path(mon_path), settings.RMT_MEDIAEXT):
-                self.__handle_file(is_directory=Path(file_path).is_dir(),
-                                   event_path=str(file_path),
-                                   source_dir=mon_path)
+        self._syncing = True
+        try:
+            # 遍历所有监控目录
+            for mon_path in self._dirconf.keys():
+                # 遍历目录下所有文件
+                for file_path in SystemUtils.list_files(Path(mon_path), settings.RMT_MEDIAEXT):
+                    self.__handle_file(is_directory=Path(file_path).is_dir(),
+                                       event_path=str(file_path),
+                                       source_dir=mon_path)
+        finally:
+            self._syncing = False
         logger.info("全量同步短剧监控目录完成！")
+        self.__refresh_mediaserver_library()
 
     def __rebuild_link_index(self, source_dir: Optional[str] = None):
         """
@@ -574,63 +594,64 @@ class ShortPlayMonitorCustom(_PluginBase):
         """
         按源文件路径查找并删除所选 qB 下载器中的任务记录，不删除下载文件。
         """
-        if not self._delete_downloader:
+        if not self._delete_downloaders:
             logger.warn("已开启删除联动，但未选择下载器，跳过 qB 下载记录删除")
             return
         try:
             source_path = self.__normalize_path_text(source_path)
             source_parent = source_path if source_is_dir else Path(source_path).parent.as_posix()
-            cache_key = f"{self._delete_downloader}|{source_parent}"
 
             with delete_record_lock:
                 now = datetime.datetime.now().timestamp()
-                cache_info = self._delete_record_cache.get(cache_key)
-                if cache_info and now - cache_info.get("time", 0) < 600:
-                    status = cache_info.get("status")
-                    if status == "deleted":
-                        logger.debug(f"qB 下载记录已在本轮删除过，跳过重复查询：{source_parent}")
-                        return
-                    if status == "miss":
-                        logger.debug(f"qB 下载记录本轮已确认未匹配，跳过重复查询：{source_parent}")
-                        return
+                for downloader in self._delete_downloaders:
+                    cache_key = f"{downloader}|{source_parent}"
+                    cache_info = self._delete_record_cache.get(cache_key)
+                    if cache_info and now - cache_info.get("time", 0) < 600:
+                        status = cache_info.get("status")
+                        if status == "deleted":
+                            logger.debug(f"qB 下载记录已在本轮删除过，跳过重复查询：{downloader} {source_parent}")
+                            continue
+                        if status == "miss":
+                            logger.debug(f"qB 下载记录本轮已确认未匹配，跳过重复查询：{downloader} {source_parent}")
+                            continue
 
-                service = DownloaderHelper().get_service(name=self._delete_downloader, type_filter="qbittorrent")
-                if not service:
-                    logger.warn(f"未找到 qB 下载器：{self._delete_downloader}，跳过下载记录删除")
-                    return
-                server = service.instance
-
-                torrents, error = server.get_torrents(tags=None)
-                if error:
-                    logger.error(f"获取 qB 下载器 {self._delete_downloader} 种子列表失败，跳过下载记录删除")
-                    return
-                deleted_hashes = []
-                for torrent in torrents:
-                    torrent_hash = torrent.get("hash")
-                    if not torrent_hash:
+                    service = DownloaderHelper().get_service(name=downloader, type_filter="qbittorrent")
+                    if not service:
+                        logger.warn(f"未找到 qB 下载器：{downloader}，跳过下载记录删除")
                         continue
-                    if self.__torrent_matches_path(server=server,
-                                                   torrent=torrent,
-                                                   source_path=source_path,
-                                                   downloader_config=service.config):
-                        if server.delete_torrents(delete_file=False, ids=torrent_hash):
-                            deleted_hashes.append(torrent_hash)
-                            logger.warn(f"检测到源文件删除，已删除 qB 下载记录（不删文件）：{self._delete_downloader} {torrent_hash} {torrent.get('name')}")
-                        else:
-                            logger.error(f"删除 qB 下载记录失败：{self._delete_downloader} {torrent_hash} {torrent.get('name')}")
-                if deleted_hashes:
+                    server = service.instance
+
+                    torrents, error = server.get_torrents(tags=None)
+                    if error:
+                        logger.error(f"获取 qB 下载器 {downloader} 种子列表失败，跳过下载记录删除")
+                        continue
+                    deleted_hashes = []
+                    for torrent in torrents:
+                        torrent_hash = torrent.get("hash")
+                        if not torrent_hash:
+                            continue
+                        if self.__torrent_matches_path(server=server,
+                                                       torrent=torrent,
+                                                       source_path=source_path,
+                                                       downloader_config=service.config):
+                            if server.delete_torrents(delete_file=False, ids=torrent_hash):
+                                deleted_hashes.append(torrent_hash)
+                                logger.warn(f"检测到源文件删除，已删除 qB 下载记录（不删文件）：{downloader} {torrent_hash} {torrent.get('name')}")
+                            else:
+                                logger.error(f"删除 qB 下载记录失败：{downloader} {torrent_hash} {torrent.get('name')}")
+                    if deleted_hashes:
+                        self._delete_record_cache[cache_key] = {
+                            "time": now,
+                            "status": "deleted",
+                            "hashes": deleted_hashes
+                        }
+                        continue
+
                     self._delete_record_cache[cache_key] = {
                         "time": now,
-                        "status": "deleted",
-                        "hashes": deleted_hashes
+                        "status": "miss"
                     }
-                    return
-
-                self._delete_record_cache[cache_key] = {
-                    "time": now,
-                    "status": "miss"
-                }
-                logger.info(f"未在 qB 下载器 {self._delete_downloader} 找到源文件对应任务：{source_path}")
+                    logger.info(f"未在 qB 下载器 {downloader} 找到源文件对应任务：{source_path}")
         except Exception as e:
             logger.error(f"删除 qB 下载记录失败：{source_path} - {e}")
 
@@ -856,6 +877,11 @@ class ShortPlayMonitorCustom(_PluginBase):
                     # 文件：nfo、图片、视频文件
                     if Path(target_path).exists():
                         logger.debug(f"目标文件 {target_path} 已存在")
+                        self.__ensure_series_metadata(target_path=target_path,
+                                                      title=title,
+                                                      rename_conf=rename_conf,
+                                                      cover_conf=cover_conf)
+                        self.__schedule_mediaserver_refresh(target_path=target_path, title=title)
                         return
 
                     # 硬链接
@@ -879,8 +905,6 @@ class ShortPlayMonitorCustom(_PluginBase):
                                 self.__save_poster(input_path=thumb_path,
                                                    poster_path=target_path.parent / "poster.jpg",
                                                    cover_conf=cover_conf)
-                                if (target_path.parent / "poster.jpg").exists():
-                                    logger.info(f"{target_path.parent / 'poster.jpg'} poster封面已生成")
                                 thumb_path.unlink()
                             else:
                                 # 检查是否有缩略图
@@ -896,11 +920,18 @@ class ShortPlayMonitorCustom(_PluginBase):
                                     # 删除多余jpg
                                     for thumb in thumb_files:
                                         Path(thumb).unlink()
+                        self.__schedule_mediaserver_refresh(target_path=target_path, title=title)
                     else:
                         logger.error(f"文件 {event_path} 硬链接到 {target_path} 失败，错误码：{retcode}")
             if self._notify:
                 # 发送消息汇总
                 media_list = self._medias.get(mediainfo.title_year if mediainfo else title) or {}
+                target_dir = None
+                if "target_path" in locals() and target_path:
+                    try:
+                        target_dir = str(Path(target_path).parent if not is_directory else Path(target_path))
+                    except Exception:
+                        target_dir = None
                 if media_list:
                     media_files = media_list.get("files") or []
                     if media_files:
@@ -910,12 +941,16 @@ class ShortPlayMonitorCustom(_PluginBase):
                         media_files = [str(event_path)]
                     media_list = {
                         "files": media_files,
-                        "time": datetime.datetime.now()
+                        "time": datetime.datetime.now(),
+                        "target_dir": media_list.get("target_dir") or target_dir,
+                        "image": media_list.get("image") or self._notify_image_urls.get(target_dir)
                     }
                 else:
                     media_list = {
                         "files": [str(event_path)],
-                        "time": datetime.datetime.now()
+                        "time": datetime.datetime.now(),
+                        "target_dir": target_dir,
+                        "image": self._notify_image_urls.get(target_dir)
                     }
                 self._medias[mediainfo.title_year if mediainfo else title] = media_list
         except Exception as e:
@@ -946,10 +981,23 @@ class ShortPlayMonitorCustom(_PluginBase):
 
                 # 判断剧集最后更新时间距现在是已超过10秒或者电影，发送消息
                 if (datetime.datetime.now() - last_update_time).total_seconds() > int(self._interval):
+                    series_dir = None
+                    if media_list.get("target_dir"):
+                        series_dir = Path(media_list.get("target_dir"))
+                    plot = self.__read_nfo_plot(series_dir) if series_dir else None
+                    text = "类别：短剧"
+                    if plot:
+                        text = f"{text}\n简介：{plot}"
+                    image = media_list.get("image")
                     # 发送消息
-                    self.post_message(mtype=NotificationType.Organize,
-                                      title=f"{medis_title_year} 共{len(media_files)}集已入库",
-                                      text="类别：短剧")
+                    message_kwargs = {
+                        "mtype": NotificationType.Organize,
+                        "title": f"{medis_title_year} 共{len(media_files)}集已入库",
+                        "text": text
+                    }
+                    if image:
+                        message_kwargs["image"] = image
+                    self.post_message(**message_kwargs)
                     # 发送完消息，移出key
                     del self._medias[medis_title_year]
                     continue
@@ -1022,7 +1070,22 @@ class ShortPlayMonitorCustom(_PluginBase):
         except Exception as e:
             print(str(e))
 
-    def __gen_tv_nfo_file(self, dir_path: Path, title: str):
+    @staticmethod
+    def __set_nfo_text_node(doc, root, tag_name: str, value: str):
+        """
+        设置或新增 NFO 文本节点。
+        """
+        nodes = root.getElementsByTagName(tag_name)
+        if nodes:
+            node = nodes[0]
+            while node.firstChild:
+                node.removeChild(node.firstChild)
+        else:
+            node = doc.createElement(tag_name)
+            root.appendChild(node)
+        node.appendChild(doc.createTextNode(value))
+
+    def __gen_tv_nfo_file(self, dir_path: Path, title: str, plot: str = None):
         """
         生成电视剧的NFO描述文件
         :param dir_path: 电视剧根目录
@@ -1037,8 +1100,128 @@ class ShortPlayMonitorCustom(_PluginBase):
         DomUtils.add_node(doc, root, "originaltitle", title)
         DomUtils.add_node(doc, root, "season", "-1")
         DomUtils.add_node(doc, root, "episode", "-1")
+        if plot:
+            self.__set_nfo_text_node(doc, root, "plot", plot)
+            self.__set_nfo_text_node(doc, root, "outline", plot)
         # 保存
         self.__save_nfo(doc, dir_path.joinpath("tvshow.nfo"))
+
+    def __save_tv_plot_nfo(self, dir_path: Path, title: str, plot: str):
+        """
+        把站点简介写入 tvshow.nfo，供 Emby 显示剧情简介。
+        """
+        if not plot:
+            return
+        nfo_path = dir_path.joinpath("tvshow.nfo")
+        try:
+            if nfo_path.exists():
+                doc = minidom.parse(str(nfo_path))
+                roots = doc.getElementsByTagName("tvshow")
+                root = roots[0] if roots else None
+                if not root:
+                    root = DomUtils.add_node(doc, doc, "tvshow")
+            else:
+                doc = minidom.Document()
+                root = DomUtils.add_node(doc, doc, "tvshow")
+                DomUtils.add_node(doc, root, "title", title)
+                DomUtils.add_node(doc, root, "originaltitle", title)
+                DomUtils.add_node(doc, root, "season", "-1")
+                DomUtils.add_node(doc, root, "episode", "-1")
+
+            self.__set_nfo_text_node(doc, root, "plot", plot)
+            self.__set_nfo_text_node(doc, root, "outline", plot)
+            self.__save_nfo(doc, nfo_path)
+            logger.info(f"站点简介已写入NFO：{nfo_path}")
+        except Exception as e:
+            logger.error(f"站点简介写入NFO失败：{nfo_path} - {e}")
+
+    @staticmethod
+    def __nfo_has_plot(dir_path: Path) -> bool:
+        """
+        判断 tvshow.nfo 是否已有简介。
+        """
+        nfo_path = dir_path.joinpath("tvshow.nfo")
+        if not nfo_path.exists():
+            return False
+        try:
+            doc = minidom.parse(str(nfo_path))
+            for tag_name in ["plot", "outline"]:
+                nodes = doc.getElementsByTagName(tag_name)
+                if nodes and nodes[0].firstChild and str(nodes[0].firstChild.nodeValue).strip():
+                    return True
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
+    def __read_nfo_plot(dir_path: Path) -> Optional[str]:
+        """
+        读取 tvshow.nfo 中的简介。
+        """
+        nfo_path = dir_path.joinpath("tvshow.nfo")
+        if not nfo_path.exists():
+            return None
+        try:
+            doc = minidom.parse(str(nfo_path))
+            for tag_name in ["plot", "outline"]:
+                nodes = doc.getElementsByTagName(tag_name)
+                if nodes and nodes[0].firstChild:
+                    plot = str(nodes[0].firstChild.nodeValue).strip()
+                    if plot:
+                        return plot
+        except Exception as e:
+            logger.debug(f"读取NFO简介失败：{nfo_path} - {e}")
+        return None
+
+    def __ensure_series_metadata(self, target_path: Path, title: str, rename_conf: str, cover_conf: str):
+        """
+        已有硬链接文件也补齐 tvshow.nfo、简介和 poster。
+        """
+        try:
+            series_dir = target_path.parent
+            nfo_path = series_dir / "tvshow.nfo"
+            poster_path = series_dir / "poster.jpg"
+
+            if not nfo_path.exists():
+                self.__gen_tv_nfo_file(dir_path=series_dir, title=title)
+
+            need_plot = not self.__nfo_has_plot(series_dir)
+            need_poster = not poster_path.exists()
+            if not need_plot and not need_poster:
+                return
+
+            site_media = None
+            if str(rename_conf) == "smart" and (need_plot or need_poster):
+                site_media = self.__query_site_media(title=title)
+
+            if need_plot and site_media and site_media.get("plot"):
+                self.__save_tv_plot_nfo(dir_path=series_dir,
+                                        title=title,
+                                        plot=site_media.get("plot"))
+
+            if need_poster:
+                thumb_path = target_path.with_name(target_path.stem + "-site.jpg")
+                if site_media and site_media.get("image"):
+                    if self.__save_image(url=site_media.get("image"), file_path=thumb_path):
+                        self._notify_image_urls[str(series_dir)] = site_media.get("image")
+                        self.__save_poster(input_path=thumb_path,
+                                           poster_path=poster_path,
+                                           cover_conf=cover_conf)
+                        thumb_path.unlink(missing_ok=True)
+                        return
+
+                # 站点没有封面时，回退视频截图。
+                thumb_path = target_path.with_name(target_path.stem + "-thumb.jpg")
+                self.get_thumb(video_path=str(target_path),
+                               image_path=str(thumb_path),
+                               frames=self._timeline)
+                if thumb_path.exists():
+                    self.__save_poster(input_path=thumb_path,
+                                       poster_path=poster_path,
+                                       cover_conf=cover_conf)
+                    thumb_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"补齐短剧元数据失败：{target_path} - {e}")
 
     def __save_nfo(self, doc, file_path: Path):
         """
@@ -1053,44 +1236,58 @@ class ShortPlayMonitorCustom(_PluginBase):
         从已配置Cookie的PT站查询封面
         """
         try:
-            image = None
-            site_confs = [
-                {
-                    "domain": "pterclub.net",
-                    "search_url": f"https://pterclub.net/torrents.php?search_mode=0&search_area=0&page=0&search={title}",
-                    "image_xpath": "//*[@id='kdescr']/img[1]/@src"
-                },
-                {
-                    "domain": "zmpt.cc",
-                    "search_url": f"https://zmpt.cc/torrents.php?search_mode=0&search_area=0&page=0&search={title}",
-                    "image_xpath": "//*[@id='kdescr']/img[1]/@src"
-                }
-            ]
-            for site_conf in site_confs:
-                domain = site_conf.get("domain")
-                site = SiteOper().get_by_domain(domain)
-                index = SitesHelper().get_indexer(domain)
-                if not site:
-                    continue
-                logger.info(f"开始检索 {site.name} {title}")
-                image = self.__get_site_torrents(url=site_conf.get("search_url"),
-                                                 site=site,
-                                                 image_xpath=site_conf.get("image_xpath"),
-                                                 index=index)
-                if image:
-                    break
+            site_media = self.__query_site_media(title=title)
+            image = site_media.get("image") if site_media else None
+            plot = site_media.get("plot") if site_media else None
 
             if not image:
                 logger.error(f"检索站点 {title} 封面失败")
                 return None
 
+            if plot:
+                self.__save_tv_plot_nfo(dir_path=file_path.parent,
+                                        title=title,
+                                        plot=plot)
+
             # 下载图片保存
             if self.__save_image(url=image, file_path=file_path):
+                self._notify_image_urls[str(file_path.parent)] = image
                 return file_path
             return None
         except Exception as e:
             logger.error(f"检索站点 {title} 封面失败 {str(e)}")
             return None
+
+    def __query_site_media(self, title: str) -> Optional[dict]:
+        """
+        从已配置 Cookie 的 PT 站检索封面和简介。
+        """
+        site_confs = [
+            {
+                "domain": "pterclub.net",
+                "search_url": f"https://pterclub.net/torrents.php?search_mode=0&search_area=0&page=0&search={title}",
+                "image_xpath": "//*[@id='kdescr']/img[1]/@src"
+            },
+            {
+                "domain": "zmpt.cc",
+                "search_url": f"https://zmpt.cc/torrents.php?search_mode=0&search_area=0&page=0&search={title}",
+                "image_xpath": "//*[@id='kdescr']/img[1]/@src"
+            }
+        ]
+        for site_conf in site_confs:
+            domain = site_conf.get("domain")
+            site = SiteOper().get_by_domain(domain)
+            index = SitesHelper().get_indexer(domain)
+            if not site:
+                continue
+            logger.info(f"开始检索 {site.name} {title}")
+            site_media = self.__get_site_torrents(url=site_conf.get("search_url"),
+                                                  site=site,
+                                                  image_xpath=site_conf.get("image_xpath"),
+                                                  index=index)
+            if site_media and site_media.get("image"):
+                return site_media
+        return None
 
     @retry(RequestException, logger=logger)
     def __save_image(self, url: str, file_path: Path):
@@ -1102,7 +1299,7 @@ class ShortPlayMonitorCustom(_PluginBase):
             r = RequestUtils().get_res(url=url, raise_exception=True)
             if r:
                 file_path.write_bytes(r.content)
-                logger.info(f"站点封面图已保存：{file_path}")
+                logger.info(f"站点封面图已保存：{file_path.parent}")
                 return True
             else:
                 logger.info(f"站点封面图下载失败，请检查网络连通性：{file_path}")
@@ -1143,7 +1340,53 @@ class ShortPlayMonitorCustom(_PluginBase):
             logger.error(f"未获取到种子封面图 {torrents[0].get('page_url')}")
             return None
 
-        return urljoin(torrents[0].get("page_url"), str(images[0]))
+        return {
+            "image": urljoin(torrents[0].get("page_url"), str(images[0])),
+            "plot": self.__extract_site_plot(html=html)
+        }
+
+    @staticmethod
+    def __clean_site_text(text: str) -> str:
+        if not text:
+            return ""
+        return (text.replace("\r", "\n")
+                .replace("\xa0", " ")
+                .replace("\u3000", " ")
+                .replace("　", " "))
+
+    def __extract_site_plot(self, html) -> Optional[str]:
+        """
+        从 PT 详情页的 #kdescr 中提取 ◎简介 段落。
+        """
+        try:
+            texts = html.xpath("string(//*[@id='kdescr'])")
+            text = self.__clean_site_text(str(texts))
+            if not text:
+                return None
+            match = re.search(
+                r"◎\s*简\s*介\s*(.*?)(?:\n\s*(?:引用|General\b|mediainfo\b|MediaInfo\b|◎[^\n]*资料|◎[^\n]*截图)|$)",
+                text,
+                re.S | re.I
+            )
+            if not match:
+                return None
+            plot = match.group(1)
+            lines = []
+            for line in plot.splitlines():
+                line = re.sub(r"[ \t]+", " ", line).strip()
+                if not line:
+                    continue
+                if re.match(r"^(引用|General\b|mediainfo\b|MediaInfo\b)", line, re.I):
+                    break
+                lines.append(line)
+            plot = "\n".join(lines).strip()
+            if not plot:
+                return None
+            logger.info(f"已获取站点简介：{plot[:80]}")
+            return plot
+        except Exception as e:
+            logger.error(f"提取站点简介失败：{e}")
+            return None
 
     def __get_page_source(self, url: str, site):
         """
@@ -1238,7 +1481,9 @@ class ShortPlayMonitorCustom(_PluginBase):
             "notify": self._notify,
             "image": self._image,
             "delete_sync": self._delete_sync,
-            "delete_downloader": self._delete_downloader,
+            "delete_downloaders": self._delete_downloaders,
+            "refresh_mediaserver": self._refresh_mediaserver,
+            "mediaservers": self._mediaservers,
             "monitor_confs": self._monitor_confs
         })
 
@@ -1269,6 +1514,80 @@ class ShortPlayMonitorCustom(_PluginBase):
         except Exception as e:
             logger.error(f"获取下载器列表失败：{e}")
             return []
+
+    @staticmethod
+    def __get_mediaserver_items() -> List[dict]:
+        """
+        获取 MoviePilot 已启用的媒体服务器列表。
+        """
+        try:
+            return [
+                {
+                    "title": config.name,
+                    "value": config.name
+                }
+                for config in MediaServerHelper().get_configs().values()
+            ]
+        except Exception as e:
+            logger.error(f"获取媒体服务器列表失败：{e}")
+            return []
+
+    def __get_quiet_delay(self) -> int:
+        """
+        获取批量入库静默等待时间。
+        """
+        try:
+            return max(10, int(self._interval or 10))
+        except Exception:
+            return 10
+
+    def __schedule_mediaserver_refresh(self, target_path: Optional[Path] = None, title: Optional[str] = None):
+        """
+        目录监控入库时合并刷新媒体库，避免一集一刷。
+        """
+        if not self._refresh_mediaserver or self._syncing:
+            return
+        if not self._scheduler:
+            self.__refresh_mediaserver_library(target_path=target_path, title=title)
+            return
+        run_date = datetime.datetime.now(tz=pytz.timezone(settings.TZ)) + datetime.timedelta(
+            seconds=self.__get_quiet_delay()
+        )
+        self._scheduler.add_job(func=self.__refresh_mediaserver_library,
+                                trigger='date',
+                                run_date=run_date,
+                                kwargs={
+                                    "target_path": target_path,
+                                    "title": title
+                                },
+                                id="shortplaymonitorcustom_refresh_mediaserver",
+                                name="短剧刮削后刷新媒体库",
+                                replace_existing=True)
+
+    def __refresh_mediaserver_library(self, target_path: Optional[Path] = None, title: Optional[str] = None):
+        """
+        通知所选媒体服务器刷新媒体库。
+        """
+        if not self._refresh_mediaserver:
+            return
+        if not self._mediaservers:
+            logger.warn("已开启媒体库刷新，但未选择媒体服务器，跳过刷新")
+            return
+
+        servers = MediaServerHelper().get_services(name_filters=self._mediaservers)
+        if not servers:
+            logger.warn(f"未找到已选择的媒体服务器：{', '.join(self._mediaservers)}，跳过刷新")
+            return
+
+        for name, service in servers.items():
+            try:
+                if hasattr(service.instance, "refresh_root_library"):
+                    service.instance.refresh_root_library()
+                    logger.info(f"已通知 {name} 刷新媒体库")
+                else:
+                    logger.warn(f"{name} 未找到可用刷新接口，跳过刷新")
+            except Exception as e:
+                logger.error(f"通知 {name} 刷新媒体库失败：{e}")
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """
@@ -1404,6 +1723,49 @@ class ShortPlayMonitorCustom(_PluginBase):
                                     {
                                         'component': 'VSwitch',
                                         'props': {
+                                            'model': 'refresh_mediaserver',
+                                            'label': '刷新媒体库',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 9
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAutocomplete',
+                                        'props': {
+                                            'model': 'mediaservers',
+                                            'label': '媒体服务器',
+                                            'items': self.__get_mediaserver_items(),
+                                            'multiple': True,
+                                            'chips': True,
+                                            'clearable': True,
+                                            'hint': '硬链接和刮削任务完成后，通知所选媒体服务器刷新媒体库。',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
                                             'model': 'delete_sync',
                                             'label': '删除联动',
                                         }
@@ -1418,13 +1780,15 @@ class ShortPlayMonitorCustom(_PluginBase):
                                 },
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'VAutocomplete',
                                         'props': {
-                                            'model': 'delete_downloader',
+                                            'model': 'delete_downloaders',
                                             'label': '下载器',
                                             'items': self.__get_downloader_items(),
+                                            'multiple': True,
+                                            'chips': True,
                                             'clearable': True,
-                                            'hint': '删除联动会双向删除源文件和硬链接；整部剧目录删除时按路径匹配此 qB 下载器任务，只删除下载记录，不删除下载文件。',
+                                            'hint': '删除联动会双向删除源文件和硬链接；整部剧目录删除时按路径匹配所选 qB 下载器任务，只删除下载记录，不删除下载文件。',
                                             'persistent-hint': True
                                         }
                                     }
@@ -1548,7 +1912,9 @@ class ShortPlayMonitorCustom(_PluginBase):
             "image": False,
             "notify": False,
             "delete_sync": False,
-            "delete_downloader": "",
+            "delete_downloaders": [],
+            "refresh_mediaserver": False,
+            "mediaservers": [],
             "interval": 10,
             "monitor_confs": "",
             "exclude_keywords": "",

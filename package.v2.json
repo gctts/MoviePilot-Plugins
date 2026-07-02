@@ -1,14 +1,14 @@
 {
   "ShortPlayMonitorCustom": {
     "name": "短剧刮削",
-    "description": "监控短剧，仅从 PTerClub、织梦获取短剧封面，支持双向删除联动。",
+    "description": "监控短剧，仅从 PTerClub、织梦获取封面和简介，支持双向删除联动。",
     "labels": "刮削",
     "version": "1.0.0",
     "icon": "Amule_B.png",
     "author": "gctts",
     "level": 1,
     "history": {
-      "v1.0.0": "第一版：禁用 TMDB，仅使用 PTerClub、织梦检索封面；支持源目录和目标目录双向删除联动，整部剧目录删除时联动删除 qB 下载记录。"
+      "v1.0.0": "第一版：禁用 TMDB，仅使用 PTerClub、织梦检索封面和简介；支持双向删除联动、qB 多选记录删除、媒体库刷新、通知简介和站点封面链接。"
     }
   }
 }
