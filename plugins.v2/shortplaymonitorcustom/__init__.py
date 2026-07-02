@@ -61,7 +61,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "4.0.10"
+    plugin_version = "4.0.12"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -136,13 +136,17 @@ class ShortPlayMonitorCustom(_PluginBase):
                 rename_conf = conf_parts[3].strip()
                 cover_conf = conf_parts[4].strip()
 
+                source_dir = source_dir if source_dir == "/" else source_dir.rstrip("/")
+                target_dir = target_dir if target_dir == "/" else target_dir.rstrip("/")
                 if not source_dir or not target_dir:
                     logger.error(f"{monitor_conf} 格式错误：监控目录和目的目录不能为空")
                     self.systemmessage.put("短剧刮削自定义版监控配置错误：监控目录和目的目录不能为空")
                     continue
-                if target_dir == "/":
-                    logger.error(f"{monitor_conf} 格式错误：目的目录不能是根目录 /")
-                    self.systemmessage.put("短剧刮削自定义版监控配置错误：目的目录不能是根目录 /")
+                target_dir_path = Path(target_dir)
+                target_dir_root = target_dir_path.resolve(strict=False)
+                if not target_dir_path.is_absolute() or target_dir_root == Path(target_dir_root.anchor):
+                    logger.error(f"{monitor_conf} 格式错误：目的目录必须是非根目录的绝对路径")
+                    self.systemmessage.put("短剧刮削自定义版监控配置错误：目的目录必须是非根目录的绝对路径")
                     continue
 
                 # 存储目录监控配置
@@ -303,6 +307,12 @@ class ShortPlayMonitorCustom(_PluginBase):
             if not dest_dir or str(dest_dir).strip() == "/" or not str(dest_dir).strip():
                 logger.error(f"{source_dir} 对应的目的目录为空或无效，跳过硬链接；请检查监控目录配置第三段")
                 return
+            dest_dir = str(dest_dir).strip()
+            dest_dir = dest_dir if dest_dir == "/" else dest_dir.rstrip("/")
+            dest_root = Path(dest_dir).resolve(strict=False)
+            if not Path(dest_dir).is_absolute() or dest_root == Path(dest_root.anchor):
+                logger.error(f"{source_dir} 对应的目的目录 {dest_dir} 无效，跳过硬链接；目的目录必须是非根目录的绝对路径")
+                return
             # 元数据
             file_meta = MetaInfoPath(Path(event_path))
             if not file_meta.name:
@@ -316,32 +326,43 @@ class ShortPlayMonitorCustom(_PluginBase):
 
                 # 目录重命名
                 if str(rename_conf) == "true" or str(rename_conf) == "false":
-                    rename_conf = bool(rename_conf)
-                    target = target_path.replace(dest_dir, "")
-                    parent = Path(Path(target).parents[0])
-                    last = target.replace(str(parent), "")
+                    rename_conf = str(rename_conf).lower() == "true"
+                    rel_target = Path(target_path).resolve(strict=False).relative_to(dest_root)
+                    parent = rel_target.parent
+                    last = Path(rel_target.name)
                     if rename_conf:
                         # 自定义识别次
                         title, _ = WordsMatcher().prepare(str(parent))
-                        target_path = Path(dest_dir).joinpath(title + last)
+                        title = str(title).strip().strip("/\\")
+                        target_path = dest_root / title / last
                     else:
                         title = parent
                 else:
                     if str(rename_conf) == "smart":
-                        target = target_path.replace(dest_dir, "")
-                        parent = Path(Path(target).parents[0])
-                        last = target.replace(str(parent), "")
+                        rel_target = Path(target_path).resolve(strict=False).relative_to(dest_root)
+                        parent = rel_target.parent
+                        last = Path(rel_target.name)
                         # 取.第一个
                         title = Path(parent).name.split(".")[0]
-                        target_path = Path(dest_dir).joinpath(title + last)
+                        title = str(title).strip().strip("/\\")
+                        target_path = dest_root / title / last
                     else:
                         logger.error(f"{target_path} 智能重命名失败")
                         return
 
                 # 文件夹同步创建
+                target_path = Path(target_path)
+                try:
+                    if not target_path.resolve(strict=False).is_relative_to(dest_root):
+                        logger.error(f"目标路径 {target_path} 不在目的目录 {dest_dir} 下，跳过硬链接；请检查监控目录配置")
+                        return
+                except Exception as e:
+                    logger.error(f"目标路径 {target_path} 校验失败，跳过硬链接：{e}")
+                    return
+
                 if is_directory:
                     # 目标文件夹不存在则创建
-                    if not Path(target_path).exists():
+                    if not target_path.exists():
                         logger.info(f"创建目标文件夹 {target_path}")
                         os.makedirs(target_path)
                 else:
@@ -356,6 +377,14 @@ class ShortPlayMonitorCustom(_PluginBase):
                             print("未找到匹配的季数和集数")
                     except Exception as e:
                         print(e)
+
+                    try:
+                        if not Path(target_path).resolve(strict=False).is_relative_to(dest_root):
+                            logger.error(f"目标路径 {target_path} 不在目的目录 {dest_dir} 下，跳过硬链接；请检查监控目录配置")
+                            return
+                    except Exception as e:
+                        logger.error(f"目标路径 {target_path} 校验失败，跳过硬链接：{e}")
+                        return
 
                     # 目标文件夹不存在则创建
                     if not Path(target_path).parent.exists():
