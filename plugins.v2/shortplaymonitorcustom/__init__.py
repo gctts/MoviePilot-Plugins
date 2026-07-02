@@ -61,7 +61,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "4.0.9"
+    plugin_version = "4.0.10"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -129,11 +129,21 @@ class ShortPlayMonitorCustom(_PluginBase):
                 if str(monitor_conf).count("#") != 4:
                     logger.error(f"{monitor_conf} 格式错误")
                     continue
-                mode = str(monitor_conf).split("#")[0]
-                source_dir = str(monitor_conf).split("#")[1]
-                target_dir = str(monitor_conf).split("#")[2]
-                rename_conf = str(monitor_conf).split("#")[3]
-                cover_conf = str(monitor_conf).split("#")[4]
+                conf_parts = str(monitor_conf).split("#")
+                mode = conf_parts[0].strip()
+                source_dir = conf_parts[1].strip()
+                target_dir = conf_parts[2].strip()
+                rename_conf = conf_parts[3].strip()
+                cover_conf = conf_parts[4].strip()
+
+                if not source_dir or not target_dir:
+                    logger.error(f"{monitor_conf} 格式错误：监控目录和目的目录不能为空")
+                    self.systemmessage.put("短剧刮削自定义版监控配置错误：监控目录和目的目录不能为空")
+                    continue
+                if target_dir == "/":
+                    logger.error(f"{monitor_conf} 格式错误：目的目录不能是根目录 /")
+                    self.systemmessage.put("短剧刮削自定义版监控配置错误：目的目录不能是根目录 /")
+                    continue
 
                 # 存储目录监控配置
                 self._dirconf[source_dir] = target_dir
@@ -290,6 +300,9 @@ class ShortPlayMonitorCustom(_PluginBase):
             rename_conf = self._renameconf.get(source_dir)
             # 封面比例
             cover_conf = self._coverconf.get(source_dir)
+            if not dest_dir or str(dest_dir).strip() == "/" or not str(dest_dir).strip():
+                logger.error(f"{source_dir} 对应的目的目录为空或无效，跳过硬链接；请检查监控目录配置第三段")
+                return
             # 元数据
             file_meta = MetaInfoPath(Path(event_path))
             if not file_meta.name:
@@ -359,7 +372,7 @@ class ShortPlayMonitorCustom(_PluginBase):
                                                       target_file=target_path,
                                                       transfer_type=self._transfer_type)
                     if retcode == 0:
-                        logger.info(f"文件 {event_path} 硬链接完成")
+                        logger.info(f"文件 {event_path} 硬链接到 {target_path} 完成")
                         # 生成 tvshow.nfo
                         if not (target_path.parent / "tvshow.nfo").exists():
                             self.__gen_tv_nfo_file(dir_path=target_path.parent,
@@ -392,7 +405,7 @@ class ShortPlayMonitorCustom(_PluginBase):
                                     for thumb in thumb_files:
                                         Path(thumb).unlink()
                     else:
-                        logger.error(f"文件 {event_path} 硬链接失败，错误码：{retcode}")
+                        logger.error(f"文件 {event_path} 硬链接到 {target_path} 失败，错误码：{retcode}")
             if self._notify:
                 # 发送消息汇总
                 media_list = self._medias.get(mediainfo.title_year if mediainfo else title) or {}
