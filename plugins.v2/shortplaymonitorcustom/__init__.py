@@ -1,6 +1,7 @@
 import datetime
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
 from threading import Lock
@@ -17,6 +18,7 @@ from requests import RequestException
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
+from app.helper.downloader import DownloaderHelper
 from app.helper.sites import SitesHelper
 from app.modules.indexer.spider import SiteSpider
 
@@ -34,6 +36,7 @@ from app.utils.system import SystemUtils
 
 ffmpeg_lock = threading.Lock()
 lock = Lock()
+delete_record_lock = Lock()
 
 
 class FileMonitorHandler(FileSystemEventHandler):
@@ -41,27 +44,40 @@ class FileMonitorHandler(FileSystemEventHandler):
     目录监控响应类
     """
 
-    def __init__(self, watching_path: str, file_change: Any, **kwargs):
+    def __init__(self, watching_path: str, file_change: Any, watch_role: str = "source", **kwargs):
         super(FileMonitorHandler, self).__init__(**kwargs)
         self._watch_path = watching_path
         self.file_change = file_change
+        self._watch_role = watch_role
 
     def on_created(self, event):
-        self.file_change.event_handler(event=event, source_dir=self._watch_path, event_path=event.src_path)
+        self.file_change.event_handler(event=event,
+                                       source_dir=self._watch_path,
+                                       event_path=event.src_path,
+                                       watch_role=self._watch_role)
 
     def on_moved(self, event):
-        self.file_change.event_handler(event=event, source_dir=self._watch_path, event_path=event.dest_path)
+        self.file_change.event_handler(event=event,
+                                       source_dir=self._watch_path,
+                                       event_path=event.dest_path,
+                                       watch_role=self._watch_role)
+
+    def on_deleted(self, event):
+        self.file_change.event_handler(event=event,
+                                       source_dir=self._watch_path,
+                                       event_path=event.src_path,
+                                       watch_role=self._watch_role)
 
 
 class ShortPlayMonitorCustom(_PluginBase):
     # 插件名称
     plugin_name = "短剧刮削自定义版"
     # 插件描述
-    plugin_desc = "监控视频短剧创建，禁用 TMDB，仅从 PTerClub、织梦获取封面。"
+    plugin_desc = "监控视频短剧创建，禁用 TMDB，仅从 PTerClub、织梦获取封面，支持双向删除联动。"
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "4.0.12"
+    plugin_version = "1.0.0"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -83,10 +99,18 @@ class ShortPlayMonitorCustom(_PluginBase):
     _observer = []
     _timeline = "00:00:10"
     _dirconf = {}
+    _targetconf = {}
+    _source_target_file_map = {}
+    _target_source_file_map = {}
+    _source_target_dir_map = {}
+    _target_source_dir_map = {}
     _renameconf = {}
     _coverconf = {}
     _interval = 10
     _notify = False
+    _delete_sync = False
+    _delete_downloader = ""
+    _delete_record_cache = {}
     _medias = {}
 
     # 定时器
@@ -95,6 +119,11 @@ class ShortPlayMonitorCustom(_PluginBase):
     def init_plugin(self, config: dict = None):
         # 清空配置
         self._dirconf = {}
+        self._targetconf = {}
+        self._source_target_file_map = {}
+        self._target_source_file_map = {}
+        self._source_target_dir_map = {}
+        self._target_source_dir_map = {}
         self._renameconf = {}
         self._coverconf = {}
 
@@ -104,6 +133,8 @@ class ShortPlayMonitorCustom(_PluginBase):
             self._image = config.get("image")
             self._interval = config.get("interval")
             self._notify = config.get("notify")
+            self._delete_sync = config.get("delete_sync")
+            self._delete_downloader = config.get("delete_downloader") or ""
             self._monitor_confs = config.get("monitor_confs")
             self._exclude_keywords = config.get("exclude_keywords") or ""
             self._transfer_type = config.get("transfer_type") or "link"
@@ -151,8 +182,10 @@ class ShortPlayMonitorCustom(_PluginBase):
 
                 # 存储目录监控配置
                 self._dirconf[source_dir] = target_dir
+                self._targetconf[target_dir] = source_dir
                 self._renameconf[source_dir] = rename_conf
                 self._coverconf[source_dir] = cover_conf
+                self.__rebuild_link_index(source_dir=source_dir)
 
                 # 启用目录监控
                 if self._enabled:
@@ -174,7 +207,9 @@ class ShortPlayMonitorCustom(_PluginBase):
                             # 内部处理系统操作类型选择最优解
                             observer = Observer(timeout=10)
                         self._observer.append(observer)
-                        observer.schedule(FileMonitorHandler(source_dir, self), path=source_dir, recursive=True)
+                        observer.schedule(FileMonitorHandler(source_dir, self, watch_role="source"),
+                                          path=source_dir,
+                                          recursive=True)
                         observer.daemon = True
                         observer.start()
                         logger.info(f"{source_dir} 的目录监控服务启动")
@@ -191,6 +226,25 @@ class ShortPlayMonitorCustom(_PluginBase):
                         else:
                             logger.error(f"{source_dir} 启动目录监控失败：{err_msg}")
                         self.systemmessage.put(f"{source_dir} 启动目录监控失败：{err_msg}")
+
+                    try:
+                        if not Path(target_dir).exists():
+                            os.makedirs(target_dir, exist_ok=True)
+                        if mode == "compatibility":
+                            target_observer = PollingObserver(timeout=10)
+                        else:
+                            target_observer = Observer(timeout=10)
+                        self._observer.append(target_observer)
+                        target_observer.schedule(FileMonitorHandler(target_dir, self, watch_role="target"),
+                                                 path=target_dir,
+                                                 recursive=True)
+                        target_observer.daemon = True
+                        target_observer.start()
+                        logger.info(f"{target_dir} 的目标目录监控服务启动")
+                    except Exception as e:
+                        err_msg = str(e)
+                        logger.error(f"{target_dir} 启动目标目录监控失败：{err_msg}")
+                        self.systemmessage.put(f"{target_dir} 启动目标目录监控失败：{err_msg}")
 
             # 运行一次定时服务
             if self._onlyonce:
@@ -228,6 +282,75 @@ class ShortPlayMonitorCustom(_PluginBase):
                                    source_dir=mon_path)
         logger.info("全量同步短剧监控目录完成！")
 
+    def __rebuild_link_index(self, source_dir: Optional[str] = None):
+        """
+        根据源目录重新建立源文件与目标硬链接的双向映射。
+        """
+        source_dirs = [source_dir] if source_dir else list(self._dirconf.keys())
+        for mon_path in source_dirs:
+            if not mon_path or not Path(mon_path).exists():
+                continue
+            for file_path in SystemUtils.list_files(Path(mon_path), settings.RMT_MEDIAEXT):
+                target_path, _ = self.__build_target_path(event_path=str(file_path), source_dir=mon_path)
+                if target_path:
+                    self.__remember_link(source_path=str(file_path), target_path=target_path)
+
+    def __remember_link(self, source_path: str, target_path: Path):
+        """
+        记录硬链接源路径和目标路径，供目标目录反向删除时使用。
+        """
+        source_file = self.__normalize_path_text(source_path)
+        target_file = self.__normalize_path_text(target_path)
+        source_dir = Path(source_file).parent.as_posix()
+        target_dir = Path(target_file).parent.as_posix()
+        self._source_target_file_map[source_file] = target_file
+        self._target_source_file_map[target_file] = source_file
+        self._source_target_dir_map[source_dir] = target_dir
+        self._target_source_dir_map[target_dir] = source_dir
+
+    def __forget_link(self, source_path: Optional[str] = None, target_path: Optional[str] = None):
+        """
+        删除已失效的路径映射。
+        """
+        if source_path:
+            source_path = self.__normalize_path_text(source_path)
+            target_path = self._source_target_file_map.pop(source_path, None) or target_path
+        if target_path:
+            target_path = self.__normalize_path_text(target_path)
+            source_path = self._target_source_file_map.pop(target_path, None) or source_path
+        if source_path:
+            self._source_target_file_map.pop(self.__normalize_path_text(source_path), None)
+        if target_path:
+            self._target_source_file_map.pop(self.__normalize_path_text(target_path), None)
+
+    def __find_target_dir_by_source_dir(self, source_path: str) -> Optional[str]:
+        """
+        查找源目录对应的目标目录，优先精确匹配，失败时按最长父目录匹配。
+        """
+        source_path = self.__normalize_path_text(source_path)
+        if source_path in self._source_target_dir_map:
+            return self._source_target_dir_map.get(source_path)
+        for indexed_source, indexed_target in sorted(self._source_target_dir_map.items(),
+                                                     key=lambda item: len(item[0]),
+                                                     reverse=True):
+            if indexed_source.startswith(f"{source_path}/") or source_path.startswith(f"{indexed_source}/"):
+                return indexed_target
+        return None
+
+    def __find_source_dir_by_target_dir(self, target_path: str) -> Optional[str]:
+        """
+        查找目标目录对应的源目录，优先精确匹配，失败时按最长父目录匹配。
+        """
+        target_path = self.__normalize_path_text(target_path)
+        if target_path in self._target_source_dir_map:
+            return self._target_source_dir_map.get(target_path)
+        for indexed_target, indexed_source in sorted(self._target_source_dir_map.items(),
+                                                     key=lambda item: len(item[0]),
+                                                     reverse=True):
+            if indexed_target.startswith(f"{target_path}/") or target_path.startswith(f"{indexed_target}/"):
+                return indexed_source
+        return None
+
     def __handle_image(self):
         """
         立即运行一次，裁剪封面
@@ -257,7 +380,7 @@ class ShortPlayMonitorCustom(_PluginBase):
                     continue
         logger.info("全量裁剪封面完成！")
 
-    def event_handler(self, event, source_dir: str, event_path: str):
+    def event_handler(self, event, source_dir: str, event_path: str, watch_role: str = "source"):
         """
         处理文件变化
         :param event: 事件
@@ -279,6 +402,20 @@ class ShortPlayMonitorCustom(_PluginBase):
                     logger.info(f"{event_path} 命中过滤关键字 {keyword}，不处理")
                     return
 
+        # 目标目录只处理删除事件，避免硬链接生成后被反向当作新增源文件处理
+        if watch_role == "target":
+            if event.event_type == "deleted":
+                self.__handle_deleted_target(is_directory=event.is_directory,
+                                             event_path=event_path,
+                                             target_dir=source_dir)
+            return
+
+        # 源目录删除文件夹时也需要处理整部剧联动删除
+        if event.event_type == "deleted" and event.is_directory:
+            self.__handle_deleted_source_dir(event_path=event_path,
+                                             source_dir=source_dir)
+            return
+
         # 不是媒体文件不处理
         if Path(event_path).suffix not in settings.RMT_MEDIAEXT:
             logger.debug(f"{event_path} 不是媒体文件")
@@ -286,9 +423,334 @@ class ShortPlayMonitorCustom(_PluginBase):
 
         # 文件发生变化
         logger.debug(f"变动类型 {event.event_type} 变动路径 {event_path}")
+        if event.event_type == "deleted":
+            self.__handle_deleted_file(is_directory=event.is_directory,
+                                       event_path=event_path,
+                                       source_dir=source_dir)
+            return
+
         self.__handle_file(is_directory=event.is_directory,
                            event_path=event_path,
                            source_dir=source_dir)
+
+    def __build_target_path(self, event_path: str, source_dir: str) -> Tuple[Optional[Path], Optional[str]]:
+        """
+        根据监控配置计算源文件对应的目标硬链接路径。
+        """
+        dest_dir = self._dirconf.get(source_dir)
+        rename_conf = self._renameconf.get(source_dir)
+        if not dest_dir or str(dest_dir).strip() == "/" or not str(dest_dir).strip():
+            logger.error(f"{source_dir} 对应的目的目录为空或无效，无法计算联动删除目标")
+            return None, None
+
+        dest_dir = str(dest_dir).strip()
+        dest_dir = dest_dir if dest_dir == "/" else dest_dir.rstrip("/")
+        dest_root = Path(dest_dir).resolve(strict=False)
+        if not Path(dest_dir).is_absolute() or dest_root == Path(dest_root.anchor):
+            logger.error(f"{source_dir} 对应的目的目录 {dest_dir} 无效，无法计算联动删除目标")
+            return None, None
+
+        target_path = event_path.replace(source_dir, dest_dir)
+        title = None
+        try:
+            if str(rename_conf) == "true" or str(rename_conf) == "false":
+                rel_target = Path(target_path).resolve(strict=False).relative_to(dest_root)
+                parent = rel_target.parent
+                last = Path(rel_target.name)
+                if str(rename_conf).lower() == "true":
+                    title, _ = WordsMatcher().prepare(str(parent))
+                    title = str(title).strip().strip("/\\")
+                    target_path = dest_root / title / last
+                else:
+                    title = str(parent)
+            elif str(rename_conf) == "smart":
+                rel_target = Path(target_path).resolve(strict=False).relative_to(dest_root)
+                parent = rel_target.parent
+                last = Path(rel_target.name)
+                title = Path(parent).name.split(".")[0]
+                title = str(title).strip().strip("/\\")
+                target_path = dest_root / title / last
+            else:
+                logger.error(f"{target_path} 智能重命名失败，无法计算联动删除目标")
+                return None, None
+
+            target_path = Path(target_path)
+            if not target_path.resolve(strict=False).is_relative_to(dest_root):
+                logger.error(f"目标路径 {target_path} 不在目的目录 {dest_dir} 下，跳过联动删除")
+                return None, None
+
+            pattern = r'S\d+E\d+'
+            matches = re.search(pattern, target_path.name)
+            if matches:
+                target_path = target_path.parent / f"{matches.group()}{target_path.suffix}"
+            if not target_path.resolve(strict=False).is_relative_to(dest_root):
+                logger.error(f"目标路径 {target_path} 不在目的目录 {dest_dir} 下，跳过联动删除")
+                return None, None
+            return target_path, title
+        except Exception as e:
+            logger.error(f"计算联动删除目标失败：{event_path} - {e}")
+            return None, None
+
+    @staticmethod
+    def __normalize_path_text(path: Any) -> str:
+        return Path(str(path)).as_posix().rstrip("/")
+
+    @staticmethod
+    def __replace_path_prefix(path: Any, source: str, target: str) -> Optional[str]:
+        if not source or not target:
+            return None
+        path_text = Path(str(path)).as_posix()
+        source_path = Path(str(source).strip()).as_posix().rstrip("/")
+        target_path = Path(str(target).strip()).as_posix().rstrip("/")
+        if path_text == source_path:
+            return target_path
+        source_prefix = f"{source_path}/"
+        if path_text.startswith(source_prefix):
+            suffix = path_text[len(source_prefix):]
+            return (Path(target_path) / suffix).as_posix()
+        return None
+
+    def __normalize_downloader_return_path(self, path: Any, downloader_config: Any) -> str:
+        """
+        把下载器返回路径按 MP 下载器路径映射反转为容器可见路径。
+        """
+        normalized_path = Path(str(path)).as_posix()
+        path_mapping = getattr(downloader_config, "path_mapping", None)
+        if path_mapping:
+            for storage_path, download_path in path_mapping:
+                mapped_path = self.__replace_path_prefix(normalized_path, download_path, storage_path)
+                if mapped_path:
+                    normalized_path = mapped_path
+                    break
+        return normalized_path.rstrip("/")
+
+    @staticmethod
+    def __paths_related(left: str, right: str) -> bool:
+        left = Path(left).as_posix().rstrip("/")
+        right = Path(right).as_posix().rstrip("/")
+        return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
+
+    def __torrent_matches_path(self, server: Any, torrent: Any, source_path: str, downloader_config: Any) -> bool:
+        """
+        判断 qB torrent 是否包含被删除的源文件路径。
+        """
+        torrent_hash = torrent.get("hash")
+        save_path = torrent.get("save_path")
+        content_path = torrent.get("content_path")
+        name = torrent.get("name")
+        candidates = []
+        if content_path:
+            candidates.append(content_path)
+        if save_path and name:
+            candidates.append(Path(save_path) / name)
+
+        for candidate in candidates:
+            normalized = self.__normalize_downloader_return_path(candidate, downloader_config)
+            if self.__paths_related(source_path, normalized):
+                return True
+
+        if not torrent_hash:
+            return False
+        torrent_files = server.get_files(tid=torrent_hash)
+        if not torrent_files:
+            return False
+        for torrent_file in torrent_files:
+            file_name = torrent_file.get("name")
+            if not file_name:
+                continue
+            if save_path:
+                candidate = Path(save_path) / file_name
+                normalized = self.__normalize_downloader_return_path(candidate, downloader_config)
+                if self.__paths_related(source_path, normalized):
+                    return True
+            if content_path:
+                candidate = Path(content_path).parent / file_name
+                normalized = self.__normalize_downloader_return_path(candidate, downloader_config)
+                if self.__paths_related(source_path, normalized):
+                    return True
+        return False
+
+    def __delete_downloader_record(self, source_path: str, source_is_dir: bool = False):
+        """
+        按源文件路径查找并删除所选 qB 下载器中的任务记录，不删除下载文件。
+        """
+        if not self._delete_downloader:
+            logger.warn("已开启删除联动，但未选择下载器，跳过 qB 下载记录删除")
+            return
+        try:
+            source_path = self.__normalize_path_text(source_path)
+            source_parent = source_path if source_is_dir else Path(source_path).parent.as_posix()
+            cache_key = f"{self._delete_downloader}|{source_parent}"
+
+            with delete_record_lock:
+                now = datetime.datetime.now().timestamp()
+                cache_info = self._delete_record_cache.get(cache_key)
+                if cache_info and now - cache_info.get("time", 0) < 600:
+                    status = cache_info.get("status")
+                    if status == "deleted":
+                        logger.debug(f"qB 下载记录已在本轮删除过，跳过重复查询：{source_parent}")
+                        return
+                    if status == "miss":
+                        logger.debug(f"qB 下载记录本轮已确认未匹配，跳过重复查询：{source_parent}")
+                        return
+
+                service = DownloaderHelper().get_service(name=self._delete_downloader, type_filter="qbittorrent")
+                if not service:
+                    logger.warn(f"未找到 qB 下载器：{self._delete_downloader}，跳过下载记录删除")
+                    return
+                server = service.instance
+
+                torrents, error = server.get_torrents(tags=None)
+                if error:
+                    logger.error(f"获取 qB 下载器 {self._delete_downloader} 种子列表失败，跳过下载记录删除")
+                    return
+                deleted_hashes = []
+                for torrent in torrents:
+                    torrent_hash = torrent.get("hash")
+                    if not torrent_hash:
+                        continue
+                    if self.__torrent_matches_path(server=server,
+                                                   torrent=torrent,
+                                                   source_path=source_path,
+                                                   downloader_config=service.config):
+                        if server.delete_torrents(delete_file=False, ids=torrent_hash):
+                            deleted_hashes.append(torrent_hash)
+                            logger.warn(f"检测到源文件删除，已删除 qB 下载记录（不删文件）：{self._delete_downloader} {torrent_hash} {torrent.get('name')}")
+                        else:
+                            logger.error(f"删除 qB 下载记录失败：{self._delete_downloader} {torrent_hash} {torrent.get('name')}")
+                if deleted_hashes:
+                    self._delete_record_cache[cache_key] = {
+                        "time": now,
+                        "status": "deleted",
+                        "hashes": deleted_hashes
+                    }
+                    return
+
+                self._delete_record_cache[cache_key] = {
+                    "time": now,
+                    "status": "miss"
+                }
+                logger.info(f"未在 qB 下载器 {self._delete_downloader} 找到源文件对应任务：{source_path}")
+        except Exception as e:
+            logger.error(f"删除 qB 下载记录失败：{source_path} - {e}")
+
+    def __is_under_root(self, path: str, roots: List[str]) -> bool:
+        try:
+            check_path = Path(path).resolve(strict=False)
+            for root in roots:
+                root_path = Path(root).resolve(strict=False)
+                if check_path != root_path and check_path.is_relative_to(root_path):
+                    return True
+        except Exception as e:
+            logger.error(f"路径安全校验失败：{path} - {e}")
+        return False
+
+    def __delete_path(self, path: str, roots: List[str], reason: str) -> bool:
+        """
+        在限定根目录内删除文件或文件夹。
+        """
+        path = self.__normalize_path_text(path)
+        if not path or path == "/" or not self.__is_under_root(path, roots):
+            logger.error(f"{reason} 路径 {path} 不在允许目录内，跳过删除")
+            return False
+        try:
+            path_obj = Path(path)
+            if not path_obj.exists():
+                logger.debug(f"{reason} 路径不存在，跳过：{path}")
+                return False
+            if path_obj.is_dir():
+                shutil.rmtree(path_obj)
+                logger.warn(f"{reason}，已删除文件夹：{path}")
+            else:
+                path_obj.unlink()
+                logger.warn(f"{reason}，已删除文件：{path}")
+            return True
+        except Exception as e:
+            logger.error(f"{reason} 删除失败：{path} - {e}")
+            return False
+
+    def __handle_deleted_source_dir(self, event_path: str, source_dir: str):
+        """
+        源目录整部剧被删除时，同步删除目标目录并删除 qB 记录。
+        """
+        if not self._delete_sync:
+            logger.debug(f"删除联动未开启，忽略源目录删除事件：{event_path}")
+            return
+        event_path = self.__normalize_path_text(event_path)
+        if event_path == self.__normalize_path_text(source_dir):
+            logger.warn(f"检测到源监控根目录删除，跳过联动删除：{event_path}")
+            return
+        target_dir = self.__find_target_dir_by_source_dir(event_path)
+        if target_dir:
+            self.__delete_path(path=target_dir,
+                               roots=list(self._targetconf.keys()),
+                               reason="源目录已删除，联动删除目标目录")
+        else:
+            logger.warn(f"源目录已删除，但未找到对应目标目录：{event_path}")
+        self.__delete_downloader_record(source_path=event_path, source_is_dir=True)
+
+    def __handle_deleted_target(self, is_directory: bool, event_path: str, target_dir: str):
+        """
+        目标目录删除时反向删除源文件/源目录，并按整部剧目录删除 qB 记录。
+        """
+        if not self._delete_sync:
+            logger.debug(f"删除联动未开启，忽略目标删除事件：{event_path}")
+            return
+        event_path = self.__normalize_path_text(event_path)
+        if event_path == self.__normalize_path_text(target_dir):
+            logger.warn(f"检测到目标监控根目录删除，跳过联动删除：{event_path}")
+            return
+        if is_directory:
+            source_path = self.__find_source_dir_by_target_dir(event_path)
+            if not source_path:
+                logger.warn(f"目标目录已删除，但未找到对应源目录：{event_path}")
+                return
+            self.__delete_path(path=source_path,
+                               roots=list(self._dirconf.keys()),
+                               reason="目标目录已删除，反向删除源目录")
+            self.__delete_downloader_record(source_path=source_path, source_is_dir=True)
+            return
+
+        if Path(event_path).suffix not in settings.RMT_MEDIAEXT:
+            logger.debug(f"{event_path} 不是媒体文件")
+            return
+        source_path = self._target_source_file_map.get(event_path)
+        if not source_path:
+            self.__rebuild_link_index()
+            source_path = self._target_source_file_map.get(event_path)
+        if not source_path:
+            logger.warn(f"目标文件已删除，但未找到对应源文件：{event_path}")
+            return
+        self.__delete_path(path=source_path,
+                           roots=list(self._dirconf.keys()),
+                           reason="目标文件已删除，反向删除源文件")
+        self.__delete_downloader_record(source_path=source_path)
+        self.__forget_link(source_path=source_path, target_path=event_path)
+
+    def __handle_deleted_file(self, is_directory: bool, event_path: str, source_dir: str):
+        """
+        源文件删除时同步删除目标硬链接，并按所选 qB 下载器删除任务记录。
+        """
+        if not self._delete_sync:
+            logger.debug(f"删除联动未开启，忽略删除事件：{event_path}")
+            return
+        if is_directory:
+            logger.debug(f"{event_path} 是目录删除事件，跳过；文件删除事件会单独处理")
+            return
+
+        target_path, _ = self.__build_target_path(event_path=event_path, source_dir=source_dir)
+        if target_path and target_path.exists():
+            try:
+                target_path.unlink()
+                logger.warn(f"源文件已删除，联动删除硬链接：{target_path}")
+            except Exception as e:
+                logger.error(f"联动删除硬链接失败：{target_path} - {e}")
+        elif target_path:
+            logger.debug(f"源文件已删除，目标硬链接不存在，跳过：{target_path}")
+
+        self.__delete_downloader_record(source_path=event_path)
+        if target_path:
+            self.__forget_link(source_path=event_path, target_path=str(target_path))
 
     def __handle_file(self, is_directory: bool, event_path: str, source_dir: str):
         """
@@ -402,12 +864,13 @@ class ShortPlayMonitorCustom(_PluginBase):
                                                       transfer_type=self._transfer_type)
                     if retcode == 0:
                         logger.info(f"文件 {event_path} 硬链接到 {target_path} 完成")
+                        self.__remember_link(source_path=event_path, target_path=target_path)
                         # 生成 tvshow.nfo
                         if not (target_path.parent / "tvshow.nfo").exists():
                             self.__gen_tv_nfo_file(dir_path=target_path.parent,
                                                    title=title)
 
-                        # 生成缩略图
+                        # 生成短剧封面
                         if not (target_path.parent / "poster.jpg").exists():
                             thumb_path = self.gen_file_thumb(title=title,
                                                              rename_conf=rename_conf,
@@ -417,7 +880,7 @@ class ShortPlayMonitorCustom(_PluginBase):
                                                    poster_path=target_path.parent / "poster.jpg",
                                                    cover_conf=cover_conf)
                                 if (target_path.parent / "poster.jpg").exists():
-                                    logger.info(f"{target_path.parent / 'poster.jpg'} 缩略图已生成")
+                                    logger.info(f"{target_path.parent / 'poster.jpg'} poster封面已生成")
                                 thumb_path.unlink()
                             else:
                                 # 检查是否有缩略图
@@ -635,19 +1098,19 @@ class ShortPlayMonitorCustom(_PluginBase):
         下载图片并保存
         """
         try:
-            logger.info(f"正在下载{file_path.stem}图片：{url} ...")
+            logger.info(f"正在下载站点封面图：{url} ...")
             r = RequestUtils().get_res(url=url, raise_exception=True)
             if r:
                 file_path.write_bytes(r.content)
-                logger.info(f"图片已保存：{file_path}")
+                logger.info(f"站点封面图已保存：{file_path}")
                 return True
             else:
-                logger.info(f"{file_path.stem}图片下载失败，请检查网络连通性")
+                logger.info(f"站点封面图下载失败，请检查网络连通性：{file_path}")
                 return False
         except RequestException as err:
             raise err
         except Exception as err:
-            logger.error(f"{file_path.stem}图片下载失败：{str(err)}")
+            logger.error(f"站点封面图下载失败：{file_path} - {str(err)}")
             return False
 
     def __get_site_torrents(self, url: str, site, image_xpath, index):
@@ -725,7 +1188,7 @@ class ShortPlayMonitorCustom(_PluginBase):
                 return
             self.gen_file_thumb_from_site(title=title, file_path=thumb_path)
             if Path(thumb_path).exists():
-                logger.info(f"{file_path} 缩略图已生成：{thumb_path}")
+                logger.info(f"{file_path} 站点封面图已获取：{thumb_path}")
                 return thumb_path
         # 单线程处理
         with ffmpeg_lock:
@@ -774,6 +1237,8 @@ class ShortPlayMonitorCustom(_PluginBase):
             "interval": self._interval,
             "notify": self._notify,
             "image": self._image,
+            "delete_sync": self._delete_sync,
+            "delete_downloader": self._delete_downloader,
             "monitor_confs": self._monitor_confs
         })
 
@@ -786,6 +1251,24 @@ class ShortPlayMonitorCustom(_PluginBase):
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
+
+    @staticmethod
+    def __get_downloader_items() -> List[dict]:
+        """
+        获取已启用的 qB 下载器列表。
+        """
+        try:
+            services = DownloaderHelper().get_services(type_filter="qbittorrent")
+            return [
+                {
+                    "title": name,
+                    "value": name
+                }
+                for name in services.keys()
+            ]
+        except Exception as e:
+            logger.error(f"获取下载器列表失败：{e}")
+            return []
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """
@@ -914,6 +1397,47 @@ class ShortPlayMonitorCustom(_PluginBase):
                             {
                                 'component': 'VCol',
                                 'props': {
+                                    'cols': 12,
+                                    'md': 3
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'delete_sync',
+                                            'label': '删除联动',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 9
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'delete_downloader',
+                                            'label': '下载器',
+                                            'items': self.__get_downloader_items(),
+                                            'clearable': True,
+                                            'hint': '删除联动会双向删除源文件和硬链接；整部剧目录删除时按路径匹配此 qB 下载器任务，只删除下载记录，不删除下载文件。',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
                                     'cols': 12
                                 },
                                 'content': [
@@ -1023,6 +1547,8 @@ class ShortPlayMonitorCustom(_PluginBase):
             "onlyonce": False,
             "image": False,
             "notify": False,
+            "delete_sync": False,
+            "delete_downloader": "",
             "interval": 10,
             "monitor_confs": "",
             "exclude_keywords": "",
