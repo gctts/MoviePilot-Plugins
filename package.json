@@ -28,12 +28,12 @@
     "name": "NodeSeek签到",
     "description": "NodeSeek 自动签到插件。",
     "labels": "站点",
-    "version": "1.0.0",
-    "icon": "signin.png",
+    "version": "2.1.0",
+    "icon": "https://www.nodeseek.com/static/image/favicon/android-chrome-192x192.png",
     "author": "gctts",
     "level": 1,
     "history": {
-      "v1.0.0": "备份版本"
+      "v2.1.0": "NodeSeek论坛自动签到，支持随机奖励和自动重试功能"
     }
   }
 }
