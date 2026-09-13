@@ -23,5 +23,17 @@
     "history": {
       "v1.0.0": "备份版本"
     }
+  },
+  "NodeSeekSign": {
+    "name": "NodeSeek签到",
+    "description": "NodeSeek 自动签到插件。",
+    "labels": "站点",
+    "version": "1.0.0",
+    "icon": "signin.png",
+    "author": "gctts",
+    "level": 1,
+    "history": {
+      "v1.0.0": "备份版本"
+    }
   }
 }
