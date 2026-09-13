@@ -24,7 +24,7 @@
       "v1.0.0": "备份版本"
     }
   },
-  "NodeSeekSign": {
+  "nodeseeksign": {
     "name": "NodeSeek签到",
     "description": "NodeSeek 自动签到插件。",
     "labels": "站点",
