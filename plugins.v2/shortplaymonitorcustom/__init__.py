@@ -21,15 +21,16 @@ from watchdog.observers.polling import PollingObserver
 from app.helper.downloader import DownloaderHelper
 from app.helper.mediaserver import MediaServerHelper
 from app.helper.sites import SitesHelper
+from app.chain.media import MediaChain
 from app.modules.indexer.spider import SiteSpider
 
 from app.core.config import settings
 from app.core.meta.words import WordsMatcher
-from app.core.metainfo import MetaInfoPath
+from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.db.site_oper import SiteOper
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas.types import NotificationType
+from app.schemas.types import MediaType, NotificationType
 from app.utils.common import retry
 from app.utils.dom import DomUtils
 from app.utils.http import RequestUtils
@@ -74,11 +75,11 @@ class ShortPlayMonitorCustom(_PluginBase):
     # 插件名称
     plugin_name = "短剧刮削"
     # 插件描述
-    plugin_desc = "监控短剧，仅从 PTerClub、织梦获取封面和简介，支持双向删除联动。"
+    plugin_desc = "监控短剧，可选 TMDB、PTerClub、织梦获取封面和简介，支持双向删除联动。"
     # 插件图标
     plugin_icon = "Amule_B.png"
     # 插件版本
-    plugin_version = "1.1.0"
+    plugin_version = "1.2.0"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -117,6 +118,7 @@ class ShortPlayMonitorCustom(_PluginBase):
     _notify_image_urls = {}
     _medias = {}
     _syncing = False
+    _scrape_sources = ["tmdb", "pterclub", "zmpt"]
 
     # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
@@ -153,6 +155,7 @@ class ShortPlayMonitorCustom(_PluginBase):
             self._monitor_confs = config.get("monitor_confs")
             self._exclude_keywords = config.get("exclude_keywords") or ""
             self._transfer_type = config.get("transfer_type") or "link"
+            self._scrape_sources = config.get("scrape_sources") or ["tmdb", "pterclub", "zmpt"]
 
         # 停止现有任务
         self.stop_service()
@@ -1192,7 +1195,7 @@ class ShortPlayMonitorCustom(_PluginBase):
 
             site_media = None
             if str(rename_conf) == "smart" and (need_plot or need_poster):
-                site_media = self.__query_site_media(title=title)
+                site_media = self.__query_media_by_sources(title=title, file_path=target_path)
 
             if need_plot and site_media and site_media.get("plot"):
                 self.__save_tv_plot_nfo(dir_path=series_dir,
@@ -1233,10 +1236,10 @@ class ShortPlayMonitorCustom(_PluginBase):
 
     def gen_file_thumb_from_site(self, title: str, file_path: Path):
         """
-        从已配置Cookie的PT站查询封面
+        从配置的刮削源查询封面
         """
         try:
-            site_media = self.__query_site_media(title=title)
+            site_media = self.__query_media_by_sources(title=title, file_path=file_path)
             image = site_media.get("image") if site_media else None
             plot = site_media.get("plot") if site_media else None
 
@@ -1258,22 +1261,56 @@ class ShortPlayMonitorCustom(_PluginBase):
             logger.error(f"检索站点 {title} 封面失败 {str(e)}")
             return None
 
-    def __query_site_media(self, title: str) -> Optional[dict]:
+    def __query_tmdb_media(self, title: str, file_path: Optional[Path] = None) -> Optional[dict]:
+        """
+        使用 MoviePilot 内置识别链从 TMDB 获取封面和简介。
+        """
+        try:
+            mediainfo = None
+            if file_path:
+                context = MediaChain().recognize_by_path(str(file_path), obtain_images=True)
+                mediainfo = context.media_info if context else None
+            if not mediainfo and title:
+                meta = MetaInfo(title)
+                meta.type = MediaType.TV
+                mediainfo = MediaChain().recognize_by_meta(meta, obtain_images=True)
+            if not mediainfo:
+                return None
+            image = mediainfo.get_poster_image(default=False) if hasattr(mediainfo, "get_poster_image") else None
+            plot = str(mediainfo.overview).strip() if getattr(mediainfo, "overview", None) else None
+            if image or plot:
+                logger.info(f"TMDB已获取 {title} 元数据：{getattr(mediainfo, 'title_year', '')}")
+                return {
+                    "image": image,
+                    "plot": plot,
+                    "source": "tmdb"
+                }
+        except Exception as e:
+            logger.warn(f"TMDB检索 {title} 失败，改用站点检索：{e}")
+        return None
+
+    def __query_site_media(self, title: str, source: Optional[str] = None) -> Optional[dict]:
         """
         从已配置 Cookie 的 PT 站检索封面和简介。
+        source: 'pterclub' 或 'zmpt'，如果为 None 则按顺序尝试所有站点
         """
         site_confs = [
             {
+                "source": "pterclub",
                 "domain": "pterclub.net",
                 "search_url": f"https://pterclub.net/torrents.php?search_mode=0&search_area=0&page=0&search={title}",
                 "image_xpath": "//*[@id='kdescr']/img[1]/@src"
             },
             {
+                "source": "zmpt",
                 "domain": "zmpt.cc",
                 "search_url": f"https://zmpt.cc/torrents.php?search_mode=0&search_area=0&page=0&search={title}",
                 "image_xpath": "//*[@id='kdescr']/img[1]/@src"
             }
         ]
+        if source:
+            site_confs = [conf for conf in site_confs if conf.get("source") == source]
+
         for site_conf in site_confs:
             domain = site_conf.get("domain")
             site = SiteOper().get_by_domain(domain)
@@ -1286,7 +1323,24 @@ class ShortPlayMonitorCustom(_PluginBase):
                                                   image_xpath=site_conf.get("image_xpath"),
                                                   index=index)
             if site_media and site_media.get("image"):
+                site_media["source"] = site_conf.get("source")
                 return site_media
+        return None
+
+    def __query_media_by_sources(self, title: str, file_path: Optional[Path] = None) -> Optional[dict]:
+        """
+        按配置的刮削源优先级查询元数据。
+        优先级：TMDB > PTerClub > 织梦
+        """
+        for source in self._scrape_sources:
+            if source == "tmdb":
+                media = self.__query_tmdb_media(title=title, file_path=file_path)
+                if media and (media.get("image") or media.get("plot")):
+                    return media
+            elif source in ["pterclub", "zmpt"]:
+                media = self.__query_site_media(title=title, source=source)
+                if media and (media.get("image") or media.get("plot")):
+                    return media
         return None
 
     @retry(RequestException, logger=logger)
@@ -1484,7 +1538,8 @@ class ShortPlayMonitorCustom(_PluginBase):
             "delete_downloaders": self._delete_downloaders,
             "refresh_mediaserver": self._refresh_mediaserver,
             "mediaservers": self._mediaservers,
-            "monitor_confs": self._monitor_confs
+            "monitor_confs": self._monitor_confs,
+            "scrape_sources": self._scrape_sources
         })
 
     def get_state(self) -> bool:
@@ -1850,12 +1905,20 @@ class ShortPlayMonitorCustom(_PluginBase):
                                 },
                                 'content': [
                                     {
-                                        'component': 'VAlert',
+                                        'component': 'VAutocomplete',
                                         'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': '配置说明：'
-                                                    'https://github.com/gctts/MoviePilot-Plugins#readme'
+                                            'model': 'scrape_sources',
+                                            'label': '刮削源',
+                                            'items': [
+                                                {'title': 'TMDB', 'value': 'tmdb'},
+                                                {'title': 'PTerClub', 'value': 'pterclub'},
+                                                {'title': '织梦', 'value': 'zmpt'}
+                                            ],
+                                            'multiple': True,
+                                            'chips': True,
+                                            'clearable': True,
+                                            'hint': '按顺序尝试各刮削源获取封面和简介，默认优先 TMDB；检索失败时回退为视频截图。',
+                                            'persistent-hint': True
                                         }
                                     }
                                 ]
@@ -1876,7 +1939,8 @@ class ShortPlayMonitorCustom(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '禁用TMDB刮削，仅使用站点管理中已配置Cookie的PTerClub、织梦检索短剧封面；检索失败时回退为视频截图。'
+                                            'text': '配置说明：'
+                                                    'https://github.com/gctts/MoviePilot-Plugins#readme'
                                         }
                                     }
                                 ]
