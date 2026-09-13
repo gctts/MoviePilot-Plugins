@@ -48,7 +48,7 @@ class nodeseeksign(_PluginBase):
     # 插件描述
     plugin_desc = "懒羊羊定制：自动完成NodeSeek论坛每日签到，支持随机奖励和自动重试功能"
     # 插件图标
-    plugin_icon = "https://www.nodeseek.com/static/image/favicon/android-chrome-192x192.png"
+    plugin_icon = "https://raw.githubusercontent.com/SAGIRIxr/MoviePilot-Plugins/main/icons/Nodeseek_A.png"
     # 插件版本
     plugin_version = "2.1.0"
     # 插件作者
