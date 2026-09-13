@@ -11,5 +11,17 @@
       "v1.1.0": "新增站点简介写入NFO和入库通知简介；支持qB多选记录删除、媒体库刷新、站点封面链接通知。",
       "v1.0.0": "禁用TMDB，仅使用PTerClub、织梦检索封面；支持双向删除联动。"
     }
+  },
+  "SubscribeAssistant": {
+    "name": "订阅助手",
+    "description": "订阅辅助管理工具。",
+    "labels": "订阅",
+    "version": "1.0.0",
+    "icon": "subscribe.png",
+    "author": "gctts",
+    "level": 1,
+    "history": {
+      "v1.0.0": "备份版本"
+    }
   }
 }
