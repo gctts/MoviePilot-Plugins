@@ -1,13 +1,14 @@
 {
   "ShortPlayMonitorCustom": {
     "name": "短剧刮削",
-    "description": "监控短剧，仅从 PTerClub、织梦获取封面和简介，支持双向删除联动。",
+    "description": "监控短剧，可选 TMDB、PTerClub、织梦获取封面和简介，支持双向删除联动。",
     "labels": "刮削",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "icon": "movie.png",
     "author": "gctts",
     "level": 1,
     "history": {
+      "v1.2.0": "新增 TMDB 刮削支持，支持可配置的刮削源优先级（TMDB、PTerClub、织梦），默认优先 TMDB。",
       "v1.1.0": "新增站点简介写入NFO和入库通知简介；支持qB多选记录删除、媒体库刷新、站点封面链接通知。",
       "v1.0.0": "禁用TMDB，仅使用PTerClub、织梦检索封面；支持双向删除联动。"
     }
