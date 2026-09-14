@@ -1,4 +1,16 @@
 {
+  "ChildrenScraper": {
+    "name": "儿童刮削",
+    "description": "监控儿童剧，按配置硬链接入库，可选 PG数据库、TMDB、好学获取封面和简介。",
+    "labels": "刮削",
+    "version": "1.0.0",
+    "icon": "Amule_B.png",
+    "author": "gctts",
+    "level": 1,
+    "history": {
+      "v1.0.0": "按插件配置硬链接入库，不走 MoviePilot 转移分类；支持勾选 PG数据库、TMDB、好学作为刮削来源；支持双向删除联动、qB多选记录删除、媒体库刷新和入库通知。"
+    }
+  },
   "ShortPlayMonitorCustom": {
     "name": "短剧刮削",
     "description": "监控短剧，可选 TMDB、PTerClub、织梦获取封面和简介，支持双向删除联动。",

@@ -1,8 +1,15 @@
 # MoviePilot-Plugins
 
-短剧刮削插件仓库，插件 ID 为 `ShortPlayMonitorCustom`，适配 MoviePilot V2 插件市场。
+适配 MoviePilot V2 插件市场的自用插件仓库。
 
-## 改动
+## 插件
+
+- [儿童刮削](docs/ChildrenScraper.md)，插件 ID：`ChildrenScraper`
+- [短剧刮削](docs/ShortPlayMonitor.md)，插件 ID：`ShortPlayMonitorCustom`
+- 订阅助手，插件 ID：`SubscribeAssistant`
+- NodeSeek 签到，插件 ID：`nodeseeksign`
+
+## 短剧刮削改动
 
 - 禁用 TMDB 识别/刮削执行路径。
 - 移除 AGSV、ilolicon 封面站点。
