@@ -1,14 +1,14 @@
 # MoviePilot-Plugins
 
-适配 MoviePilot V2 插件市场的自用插件仓库。
+MoviePilot V3 自用插件仓库。
 
 ## 插件
 
 - [儿童刮削](docs/ChildrenScraper.md)，插件 ID：`ChildrenScraper`
 - [短剧刮削](docs/ShortPlayMonitor.md)，插件 ID：`ShortPlayMonitorCustom`
-- [媒体库服务器通知](docs/MediaServerMsg.md)，插件 ID：`MediaServerMsg`（MoviePilot V3）
-- 订阅助手，插件 ID：`SubscribeAssistant`
-- NodeSeek 签到，插件 ID：`nodeseeksign`
+- [媒体库服务器通知](docs/MediaServerMsg.md)，插件 ID：`MediaServerMsg`
+- [订阅助手](docs/SubscribeAssistant.md)，插件 ID：`SubscribeAssistant`
+- [NodeSeek 签到](docs/NodeSeekSign.md)，插件 ID：`nodeseeksign`
 
 ## 短剧刮削改动
 

@@ -1,4 +1,34 @@
 {
+  "ChildrenScraper": {
+    "name": "儿童刮削",
+    "description": "监控儿童剧，按配置硬链接入库，可选 PG数据库、TMDB、好学获取封面和简介。",
+    "labels": "刮削",
+    "version": "1.0.0",
+    "icon": "Amule_B.png",
+    "author": "gctts",
+    "level": 1,
+    "release": true,
+    "history": {
+      "v1.0.0": "按插件配置硬链接入库，不走 MoviePilot 转移分类；支持勾选 PG数据库、TMDB、好学作为刮削来源；支持双向删除联动、qB多选记录删除、媒体库刷新和入库通知。"
+    },
+    "system_version": ">=3.0.0"
+  },
+  "ShortPlayMonitorCustom": {
+    "name": "短剧刮削",
+    "description": "监控短剧，可选 TMDB、PTerClub、织梦获取封面和简介，支持双向删除联动。",
+    "labels": "刮削",
+    "version": "1.2.0",
+    "icon": "movie.png",
+    "author": "gctts",
+    "level": 1,
+    "release": true,
+    "history": {
+      "v1.2.0": "新增 TMDB 刮削支持，支持可配置的刮削源优先级（TMDB、PTerClub、织梦），默认优先 TMDB。",
+      "v1.1.0": "新增站点简介写入NFO和入库通知简介；支持qB多选记录删除、媒体库刷新、站点封面链接通知。",
+      "v1.0.0": "禁用TMDB，仅使用PTerClub、织梦检索封面；支持双向删除联动。"
+    },
+    "system_version": ">=3.0.0"
+  },
   "MediaServerMsg": {
     "name": "媒体库服务器通知",
     "description": "发送Emby/Jellyfin/Plex服务器的播放、入库等通知消息。",
@@ -15,6 +45,35 @@
       "v2.1.1": "停止时封闭Webhook并取消等待聚合任务；Timer回调超时会保留所有权供宿主重试。",
       "v2.1.0": "适配 V3 SDK 导入规范。",
       "v2.0.0": "V3 独立大版本。"
+    },
+    "system_version": ">=3.0.0"
+  },
+  "SubscribeAssistant": {
+    "name": "订阅助手",
+    "description": "多场景管理订阅，实现订阅种子删除以及自动待定、暂停和洗版。",
+    "labels": "订阅",
+    "version": "2.24",
+    "icon": "https://raw.githubusercontent.com/InfinityPacer/MoviePilot-Plugins/main/icons/subscribeassistant.png",
+    "author": "gctts",
+    "level": 1,
+    "release": true,
+    "history": {
+      "v2.24": "兼容新版 Transmission SDK 字段，避免订阅种子巡检读取异常。",
+      "v2.23": "适配主程序订阅进度刷新，统一洗版回填、完成和删种回滚口径。"
+    },
+    "system_version": ">=3.0.0"
+  },
+  "nodeseeksign": {
+    "name": "NodeSeek签到",
+    "description": "NodeSeek 自动签到插件。",
+    "labels": "站点",
+    "version": "2.1.0",
+    "icon": "https://raw.githubusercontent.com/gctts/MoviePilot-Plugins/main/icons/Nodeseek_A.png",
+    "author": "gctts",
+    "level": 1,
+    "release": true,
+    "history": {
+      "v2.1.0": "NodeSeek论坛自动签到，支持随机奖励和自动重试功能。"
     },
     "system_version": ">=3.0.0"
   }

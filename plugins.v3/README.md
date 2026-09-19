@@ -4,4 +4,8 @@
 
 当前插件：
 
-- `mediaservermsg`：媒体库服务器通知
+- [`childrenscraper`](childrenscraper/)：儿童刮削
+- [`shortplaymonitorcustom`](shortplaymonitorcustom/)：短剧刮削
+- [`mediaservermsg`](mediaservermsg/)：媒体库服务器通知
+- [`subscribeassistant`](subscribeassistant/)：订阅助手
+- [`nodeseeksign`](nodeseeksign/)：NodeSeek 签到

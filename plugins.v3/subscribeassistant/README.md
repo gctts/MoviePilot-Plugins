@@ -38,7 +38,7 @@
 - v2.1：洗版资源下载时清理相关整理记录并删除源文件及媒体库文件
 - v2.0：支持监听手动删除以及修复细节问题
 
-<!-- 完整 history 以 package.v2.json 中 SubscribeAssistant.history 为准；发版时同步更新两处。 -->
+<!-- 完整 history 以 package.v3.json 中 SubscribeAssistant.history 为准；发版时同步更新两处。 -->
 
 ## 功能概览
 
