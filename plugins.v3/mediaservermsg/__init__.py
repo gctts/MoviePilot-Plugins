@@ -42,7 +42,7 @@ class MediaServerMsg(_PluginBase):
     # 插件图标
     plugin_icon = "mediaplay.png"
     # 插件版本
-    plugin_version = "2.1.2"
+    plugin_version = "2.1.3"
     # 插件作者
     plugin_author = "jxxghp"
     # 作者主页
@@ -521,11 +521,16 @@ class MediaServerMsg(_PluginBase):
                 logger.info(f"未开启媒体服务器类型 {channel} 的消息通知")
                 return
 
-            # 通用去重：构造去重键
-            item_id = getattr(event_info, 'item_id', '')
-            if item_id:
+            # 通用去重：构造去重键。Emby 的电视剧事件会将 item_id 解析为
+            # SeriesId，同一批入库的不同单集不能直接共用该值，否则只会保留首集。
+            dedupe_item_id = self._get_dedupe_item_id(
+                event_info=event_info,
+                event_action_type=event_action_type,
+            )
+            if dedupe_item_id:
                 # 使用标准化后的事件类型去重，避免同类事件别名造成重复通知。
-                dedupe_key = f"{server_name}-{event_action_type}-{item_id}" if server_name else f"{event_action_type}-{item_id}"
+                dedupe_key = (f"{server_name}-{event_action_type}-{dedupe_item_id}"
+                              if server_name else f"{event_action_type}-{dedupe_item_id}")
                 # 检查是否已处理过该事件
                 if dedupe_key in self.__get_elements():
                     logger.debug(f"检测到重复Webhook事件，已处理过: {dedupe_key}")
@@ -682,6 +687,33 @@ class MediaServerMsg(_PluginBase):
 
         except Exception as e:
             logger.error(f"处理Webhook事件时发生错误: {str(e)}", exc_info=True)
+
+    @staticmethod
+    def _get_dedupe_item_id(event_info: WebhookEventInfo,
+                            event_action_type: str) -> str:
+        """返回用于 Webhook 去重的媒体项标识。
+
+        电视剧聚合仍按 SeriesId 分组，但入库事件必须按单集去重。优先读取
+        Webhook 原始 ``Item.Id``；如果媒体服务器没有提供该字段，则使用
+        ``SeriesId + 季号 + 集号``，避免同一批不同单集被误判为重复消息。
+        """
+        item_id = getattr(event_info, 'item_id', '')
+        item_type = getattr(event_info, 'item_type', '')
+        if event_action_type != "library.new" or item_type not in ["TV", "SHOW"]:
+            return str(item_id) if item_id else ""
+
+        json_object = getattr(event_info, 'json_object', None)
+        if isinstance(json_object, dict):
+            raw_item = json_object.get("Item", {})
+            if isinstance(raw_item, dict) and raw_item.get("Id"):
+                return str(raw_item.get("Id"))
+
+        season_id = getattr(event_info, 'season_id', None)
+        episode_id = getattr(event_info, 'episode_id', None)
+        if item_id and season_id is not None and episode_id is not None:
+            return f"{item_id}-S{season_id}-E{episode_id}"
+
+        return str(item_id) if item_id else ""
 
     def _get_series_id(self, event_info: WebhookEventInfo) -> Optional[str]:
         """
