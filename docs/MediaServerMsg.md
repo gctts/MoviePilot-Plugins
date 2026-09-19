@@ -20,4 +20,4 @@ MoviePilot 的 Emby Webhook 解析会将电视剧事件的 `item_id` 设置为�
 ## 版本要求
 
 - MoviePilot `>= 3.0.0`
-- 插件版本：`2.1.3`
+- 插件版本：`2.1.4`
