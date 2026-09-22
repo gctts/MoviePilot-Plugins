@@ -42,7 +42,7 @@ class MediaServerMsg(_PluginBase):
     # 插件图标
     plugin_icon = "mediaplay.png"
     # 插件版本
-    plugin_version = "2.1.4"
+    plugin_version = "2.1.5"
     # 插件作者
     plugin_author = "gctts"
     # 作者主页
@@ -928,17 +928,21 @@ class MediaServerMsg(_PluginBase):
                     message_texts.append(
                         f"⏰ 时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
 
-                    # 收集集数信息
-                    episode_details = []
+                    # 按季号、集号的数值排序并去重，不使用 Webhook 到达顺序。
+                    episode_numbers = set()
                     for event in events:
                         if (hasattr(event, 'season_id') and event.season_id is not None and
                                 hasattr(event, 'episode_id') and event.episode_id is not None):
                             try:
-                                episode_details.append(
-                                    f"S{int(event.season_id):02d}E{int(event.episode_id):02d}")
+                                episode_numbers.add(
+                                    (int(event.season_id), int(event.episode_id)))
                             except (ValueError, TypeError):
                                 pass
 
+                    episode_details = [
+                        f"S{season:02d}E{episode:02d}"
+                        for season, episode in sorted(episode_numbers)
+                    ]
                     if episode_details:
                         message_texts.append(
                             f"📺 季集：{', '.join(episode_details)}")
@@ -1202,6 +1206,9 @@ class MediaServerMsg(_PluginBase):
 
                 for i in range(1, len(episodes)):
                     current = episodes[i]["episode"]
+                    # 同集的不同媒体项或重复事件不应打断连续区间。
+                    if current == end:
+                        continue
                     # 如果当前集号与上一集连续
                     if current == end + 1:
                         end = current
@@ -1229,11 +1236,15 @@ class MediaServerMsg(_PluginBase):
         except Exception as e:
             logger.error(f"合并集数信息时出错: {str(e)}")
             # 出错时返回简单的集数列表
-            simple_details = []
-            for season in sorted(season_episodes.keys()):
-                for episode_info in season_episodes[season]:
-                    simple_details.append(
-                        f"S{season:02d}E{episode_info['episode']:02d}")
+            episode_numbers = {
+                (season, episode_info["episode"])
+                for season, episodes in season_episodes.items()
+                for episode_info in episodes
+            }
+            simple_details = [
+                f"S{season:02d}E{episode:02d}"
+                for season, episode in sorted(episode_numbers)
+            ]
             return ", ".join(simple_details)
 
         return ", ".join(merged_details)
